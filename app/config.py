@@ -38,7 +38,7 @@ CHAT_ID = os.environ.get("CHAT_ID", "")
 
 # LLM (OneProvider)
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.oneprovider.dev")
-LLM_MODEL = os.environ.get("LLM_MODEL", "claude-sonnet-4-20250514")
+LLM_MODEL = os.environ.get("LLM_MODEL", "claude-sonnet-4-6")
 
 # Image (cc-vibe)
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://cc-vibe.com/v1")

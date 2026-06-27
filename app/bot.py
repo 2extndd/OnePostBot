@@ -22,7 +22,7 @@ from aiogram.types import (
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.exceptions import TelegramForbiddenError
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
 from .config import (
     BOT_TOKEN, TOPIC_ID, CHAT_ID, TOPICS,
@@ -105,23 +105,73 @@ def channels_menu_kb():
 
 # ---------- helpers ----------
 
-async def send_with_topic(chat_id: int, text: str, reply_markup=None):
-    """Отправить сообщение в тему."""
+import contextvars
+
+_UNSET = object()
+_current_thread = contextvars.ContextVar("current_thread", default=None)
+
+
+@dp.update.outer_middleware()
+async def thread_context_middleware(handler, event, data):
+    """Запоминает тред входящего апдейта, чтобы ответы шли в тот же топик."""
+    thread = None
+    msg = getattr(event, "message", None)
+    cb = getattr(event, "callback_query", None)
+    if msg is not None:
+        thread = getattr(msg, "message_thread_id", None)
+    elif cb is not None and getattr(cb, "message", None) is not None:
+        thread = getattr(cb.message, "message_thread_id", None)
+    token = _current_thread.set(thread)
     try:
+        return await handler(event, data)
+    finally:
+        _current_thread.reset(token)
+
+
+async def send_with_topic(chat_id: int, text: str, reply_markup=None, thread_id=_UNSET):
+    """
+    Отправить сообщение.
+    thread_id:
+      - не передан (_UNSET) → берём тред текущего апдейта (из middleware)
+      - None → без треда (личка / обычный чат)
+      - число → конкретный тред
+    """
+    async def _send(tid):
         kwargs = {"chat_id": chat_id, "text": text}
-        if TOPIC_ID:
-            kwargs["message_thread_id"] = TOPIC_ID
+        if tid:
+            kwargs["message_thread_id"] = tid
         if reply_markup:
             kwargs["reply_markup"] = reply_markup
         await bot.send_message(**kwargs)
+
+    target_thread = _current_thread.get() if thread_id is _UNSET else thread_id
+
+    try:
+        await _send(target_thread)
     except TelegramForbiddenError as e:
         logger.error(f"TelegramForbiddenError: {e}")
-        await bot.send_message(chat_id=chat_id, text=f"❌ Ошибка доступа: проверьте права бота в канале")
+        try:
+            await bot.send_message(chat_id=chat_id, text="❌ Ошибка доступа: проверьте права бота в канале")
+        except Exception:
+            pass
+    except TelegramBadRequest as e:
+        if "thread" in str(e).lower():
+            try:
+                await _send(None)
+            except Exception as e2:
+                logger.error(f"send_with_topic retry failed: {e2}")
+        else:
+            logger.error(f"send_with_topic BadRequest: {e}")
 
 
-async def send_error(chat_id: int, text: str):
-    """Отправить ошибку и ответить на коллбек, если есть."""
-    await send_with_topic(chat_id, f"❌ {text}")
+def thread_of(message: Message):
+    """Извлекает message_thread_id из входящего сообщения (или None)."""
+    return getattr(message, "message_thread_id", None)
+
+
+async def send_error(chat_id: int, text: str, thread_id=_UNSET):
+    """Отправить ошибку."""
+    await send_with_topic(chat_id, f"❌ {text}", thread_id=thread_id)
 
 
 # ---------- commands ----------
