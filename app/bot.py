@@ -52,6 +52,41 @@ class RewriteState(StatesGroup):
     waiting_prompt = State()
 
 
+class ParseState(StatesGroup):
+    waiting_count = State()
+
+
+class ChannelState(StatesGroup):
+    waiting_add = State()
+    waiting_del = State()
+
+
+# ---------- keyboards ----------
+
+def main_menu_kb():
+    """Главное меню."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📥 Парсить посты")],
+            [KeyboardButton(text="📚 Управление каналами"), KeyboardButton(text="📤 Опубликовать")],
+            [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="❓ Помощь")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def channels_menu_kb():
+    """Меню управления каналами."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📋 Список каналов")],
+            [KeyboardButton(text="➕ Добавить канал"), KeyboardButton(text="➖ Удалить канал")],
+            [KeyboardButton(text="🔙 Главное меню")],
+        ],
+        resize_keyboard=True,
+    )
+
+
 # ---------- helpers ----------
 
 async def send_with_topic(chat_id: int, text: str, reply_markup=None):
@@ -78,31 +113,10 @@ async def send_error(chat_id: int, text: str):
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="/parse 10"), KeyboardButton(text="/parse 20")],
-            [KeyboardButton(text="/publish"), KeyboardButton(text="/watch")],
-            [KeyboardButton(text="/help")],
-        ],
-        resize_keyboard=True,
-    )
     await send_with_topic(
         message.chat.id,
-        "🤖 TG Publisher бот активен!\n\n"
-        "📋 Команды:\n"
-        "/parse N — показать последние N постов\n"
-        "/parse @channel N — парсить конкретный канал\n\n"
-        "При показе постов доступны кнопки:\n"
-        "• Рерайт — переписать текст (на английском)\n"
-        "• Рерайт промт — переписать с твоим промптом\n"
-        "• Перевести — перевести на английский\n"
-        "• Перегенерировать фото — улучшить изображение\n"
-        "• Опубликовать — добавить в очередь\n\n"
-        "/publish — опубликовать одобренные посты\n"
-        "/watch — включить мониторинг новых постов\n"
-        "/stop — остановить мониторинг\n"
-        "/help — справка",
-        reply_markup=kb,
+        "🤖 TG Publisher бот активен!\n\nВыберите действие из меню ниже:",
+        reply_markup=main_menu_kb(),
     )
 
 
@@ -130,6 +144,38 @@ async def cmd_help(message: Message):
     )
 
 
+async def do_parse(message: Message, state: FSMContext, count: int = 10, channel: str = None):
+    """Общая логика парсинга — вызывается из команды и из меню."""
+    parser = TGParser(phone=TELEPHONE)
+    await parser.start()
+
+    try:
+        if channel:
+            channels = [channel]
+        else:
+            db_channels = db.get_channels()
+            channels = db_channels if db_channels else PARSE_CHANNELS
+        if not channels:
+            await send_error(message.chat.id, "Нет каналов для парсинга. Добавьте через меню «Управление каналами».")
+            return
+
+        posts = await parser.fetch_with_photos(channels=channels, since_days=PARSE_DAYS)
+
+        if not posts:
+            await send_error(message.chat.id, "Нет новых постов за последние дни.")
+            return
+
+        posts = posts[:count]
+        await state.update_data(posts=posts, channel=channel)
+        await show_post(parser, posts, message, state, index=0)
+
+    except Exception as e:
+        logger.error(f"Parse error: {e}\n{traceback.format_exc()}")
+        await send_error(message.chat.id, f"{e}")
+    finally:
+        await parser.close()
+
+
 @dp.message(Command("parse"))
 async def cmd_parse(message: Message, state: FSMContext):
     await state.clear()
@@ -153,35 +199,7 @@ async def cmd_parse(message: Message, state: FSMContext):
         except ValueError:
             pass
 
-    parser = TGParser(phone=TELEPHONE)
-    await parser.start()
-
-    try:
-        if channel:
-            channels = [channel]
-        else:
-            # Берём каналы из БД, fallback на конфиг
-            db_channels = db.get_channels()
-            channels = db_channels if db_channels else PARSE_CHANNELS
-        if not channels:
-            await send_error(message.chat.id, "Нет каналов для парсинга. Добавьте через /addchannel @канал")
-            return
-
-        posts = await parser.fetch_with_photos(channels=channels, since_days=PARSE_DAYS)
-
-        if not posts:
-            await send_error(message.chat.id, "Нет новых постов за последние дни.")
-            return
-
-        # Сохраняем посты в состояние
-        await state.update_data(posts=posts, channel=channel)
-        await show_post(parser, posts, message, state, index=0)
-
-    except Exception as e:
-        logger.error(f"Parse error: {e}\n{traceback.format_exc()}")
-        await send_error(message.chat.id, f"{e}")
-    finally:
-        await parser.close()
+    await do_parse(message, state, count=count, channel=channel)
 
 
 @dp.message(Command("config"))
@@ -440,8 +458,8 @@ async def handle_publish(callback: types.CallbackQuery, state: FSMContext):
     )
 
 
-@dp.message(Command("publish"))
-async def cmd_publish(message: Message):
+async def do_publish(message: Message):
+    """Общая логика публикации — вызывается из команды и из меню."""
     pending = get_pending_posts()
     if not pending:
         await send_error(message.chat.id, "Очередь пуста. Нет постов для публикации.")
@@ -476,6 +494,11 @@ async def cmd_publish(message: Message):
         await send_with_topic(message.chat.id, "⚠️ Публикации завершены с ошибками.")
 
 
+@dp.message(Command("publish"))
+async def cmd_publish(message: Message):
+    await do_publish(message)
+
+
 # ---------- watch ----------
 
 @dp.message(Command("watch"))
@@ -498,6 +521,151 @@ async def cmd_stop(message: Message):
         await send_with_topic(message.chat.id, "🛑 Мониторинг остановлен.")
     else:
         await send_with_topic(message.chat.id, "📭 Мониторинг не был активен.")
+
+
+# ---------- MENU BUTTON HANDLERS ----------
+
+@dp.message(F.text == "📥 Парсить посты")
+async def menu_parse(message: Message, state: FSMContext):
+    await state.set_state(ParseState.waiting_count)
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="5"), KeyboardButton(text="10"), KeyboardButton(text="20")],
+            [KeyboardButton(text="🔙 Главное меню")],
+        ],
+        resize_keyboard=True,
+    )
+    await send_with_topic(message.chat.id, "Сколько последних постов спарсить? Введите число или выберите:", reply_markup=kb)
+
+
+@dp.message(ParseState.waiting_count)
+async def menu_parse_count(message: Message, state: FSMContext):
+    if message.text == "🔙 Главное меню":
+        await state.clear()
+        await send_with_topic(message.chat.id, "🏠 Главное меню", reply_markup=main_menu_kb())
+        return
+    try:
+        count = int(message.text.strip())
+    except ValueError:
+        await send_with_topic(message.chat.id, "Введите число, например 10.")
+        return
+    await state.clear()
+    await send_with_topic(message.chat.id, f"🔍 Парсю последние {count} постов...", reply_markup=main_menu_kb())
+    await do_parse(message, state, count=count)
+
+
+@dp.message(F.text == "📤 Опубликовать")
+async def menu_publish(message: Message):
+    await do_publish(message)
+
+
+@dp.message(F.text == "⚙️ Настройки")
+async def menu_settings(message: Message):
+    channels = db.get_channels()
+    ch_text = ", ".join(f"@{c}" for c in channels) if channels else "нет"
+    topics_text = "\n".join(f"  • chat={t['chat_id']}, topic={t['topic_id']}" for t in TOPICS)
+    await send_with_topic(
+        message.chat.id,
+        f"⚙️ Настройки:\n\n"
+        f"📚 Каналы: {ch_text}\n"
+        f"📍 Топики публикации:\n{topics_text}\n"
+        f"📅 Дней назад: {PARSE_DAYS}\n"
+        f"⏱ Задержка постинга: {POST_DELAY_MIN}-{POST_DELAY_MAX} мин",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@dp.message(F.text == "❓ Помощь")
+async def menu_help(message: Message):
+    await send_with_topic(
+        message.chat.id,
+        "📋 Как пользоваться:\n\n"
+        "1️⃣ «Управление каналами» → добавьте каналы для парсинга\n"
+        "2️⃣ «Парсить посты» → выберите количество постов\n"
+        "3️⃣ Под каждым постом кнопки:\n"
+        "   • Рерайт — переписать + перевести на английский\n"
+        "   • Рерайт промт — переписать по вашему запросу\n"
+        "   • Перевести — перевести на английский\n"
+        "   • Перегенерировать фото — улучшить изображение\n"
+        "   • Опубликовать — добавить в очередь\n"
+        "4️⃣ «Опубликовать» → публикация во все топики",
+        reply_markup=main_menu_kb(),
+    )
+
+
+# ---------- channels menu ----------
+
+@dp.message(F.text == "📚 Управление каналами")
+async def menu_channels(message: Message):
+    await send_with_topic(message.chat.id, "📚 Управление каналами:", reply_markup=channels_menu_kb())
+
+
+@dp.message(F.text == "📋 Список каналов")
+async def menu_channels_list(message: Message):
+    channels = db.get_channels()
+    if not channels:
+        await send_with_topic(message.chat.id, "📭 Список пуст. Нажмите «Добавить канал».", reply_markup=channels_menu_kb())
+        return
+    text = "📚 Каналы для парсинга:\n" + "\n".join(f"• @{ch}" for ch in channels)
+    await send_with_topic(message.chat.id, text, reply_markup=channels_menu_kb())
+
+
+@dp.message(F.text == "➕ Добавить канал")
+async def menu_channels_add(message: Message, state: FSMContext):
+    await state.set_state(ChannelState.waiting_add)
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 Управление каналами")]], resize_keyboard=True)
+    await send_with_topic(message.chat.id, "Введите @username канала (можно несколько через пробел):", reply_markup=kb)
+
+
+@dp.message(ChannelState.waiting_add)
+async def menu_channels_add_input(message: Message, state: FSMContext):
+    if message.text in ("🔙 Управление каналами", "🔙 Главное меню"):
+        await state.clear()
+        await send_with_topic(message.chat.id, "📚 Управление каналами:", reply_markup=channels_menu_kb())
+        return
+    added = []
+    for token in message.text.split():
+        username = token.strip().lstrip("@")
+        if username:
+            db.add_channel(username)
+            added.append(username)
+    await state.clear()
+    txt = "✅ Добавлено: " + ", ".join(f"@{u}" for u in added) if added else "❌ Не распознал канал."
+    await send_with_topic(message.chat.id, txt, reply_markup=channels_menu_kb())
+
+
+@dp.message(F.text == "➖ Удалить канал")
+async def menu_channels_del(message: Message, state: FSMContext):
+    channels = db.get_channels()
+    if not channels:
+        await send_with_topic(message.chat.id, "📭 Список пуст.", reply_markup=channels_menu_kb())
+        return
+    await state.set_state(ChannelState.waiting_del)
+    rows = [[KeyboardButton(text=f"@{ch}")] for ch in channels]
+    rows.append([KeyboardButton(text="🔙 Управление каналами")])
+    kb = ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+    await send_with_topic(message.chat.id, "Выберите канал для удаления:", reply_markup=kb)
+
+
+@dp.message(ChannelState.waiting_del)
+async def menu_channels_del_input(message: Message, state: FSMContext):
+    if message.text in ("🔙 Управление каналами", "🔙 Главное меню"):
+        await state.clear()
+        await send_with_topic(message.chat.id, "📚 Управление каналами:", reply_markup=channels_menu_kb())
+        return
+    username = message.text.strip().lstrip("@")
+    db.remove_channel(username)
+    await state.clear()
+    await send_with_topic(message.chat.id, f"✅ Канал @{username} удалён", reply_markup=channels_menu_kb())
+
+
+@dp.message(F.text.in_(["🔙 Главное меню", "🔙 Управление каналами"]))
+async def menu_back(message: Message, state: FSMContext):
+    await state.clear()
+    if message.text == "🔙 Управление каналами":
+        await send_with_topic(message.chat.id, "📚 Управление каналами:", reply_markup=channels_menu_kb())
+    else:
+        await send_with_topic(message.chat.id, "🏠 Главное меню", reply_markup=main_menu_kb())
 
 
 async def watch_loop(chat_id: str):
