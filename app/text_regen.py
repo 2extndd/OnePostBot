@@ -45,13 +45,11 @@ def _extract_text(response) -> str:
 
 def _build_system_blocks(extra: str = "") -> list:
     """
-    System prompt с project_context. Помечаем cache_control для кэширования.
+    System prompt = project_context (чистый фон, без задач).
+    Помечаем cache_control для кэширования Anthropic.
     """
     project_context = db.get_setting("project_context")
-    system_text = (
-        "Ты — редактор контента для Telegram-канала.\n\n"
-        f"ОБЩИЙ КОНТЕКСТ ПРОЕКТА:\n{project_context}"
-    )
+    system_text = project_context
     if extra:
         system_text += f"\n\n{extra}"
 
@@ -88,16 +86,19 @@ def _call_llm(system_blocks: list, user_text: str, max_tokens: int = 1500) -> st
             f"out={getattr(usage,'output_tokens','?')} "
             f"cache_read={getattr(usage,'cache_read_input_tokens','?')}"
         )
-    return result
+    # Приводим вывод к валидному Telegram-HTML (markdown→html, чистка тегов)
+    from .tg_html import to_telegram_html
+    return to_telegram_html(result)
 
 
 def rewrite_news(news_text: str, custom_prompt: str = None) -> str:
     """
     Рерайт основного текста новости.
     Использует rewrite_prompt из настроек (или custom_prompt, если задан).
+    Контент новости отделён XML-тегами от инструкции.
     """
     instruction = custom_prompt or db.get_setting("rewrite_prompt")
-    user_text = f"{instruction}\n\nИСХОДНАЯ НОВОСТЬ:\n{news_text}"
+    user_text = f"{instruction}\n\n<source_post>\n{news_text}\n</source_post>"
     result = _call_llm(_build_system_blocks(), user_text)
     logger.info(f"📝 Новость переписана ({len(result)} символов)")
     return result
@@ -107,20 +108,19 @@ def add_ad(text: str) -> str:
     """
     Добавляет рекламную интеграцию к тексту.
     Использует ad_prompt из настроек. НЕ переписывает основной текст.
+    Контент отделён XML-тегами.
     """
     instruction = db.get_setting("ad_prompt")
-    user_text = f"{instruction}\n\nТЕКСТ ПОСТА:\n{text}"
+    user_text = f"{instruction}\n\n<post_to_keep>\n{text}\n</post_to_keep>"
     result = _call_llm(_build_system_blocks(), user_text)
     logger.info(f"🎯 Реклама добавлена ({len(result)} символов)")
     return result
 
 
 def translate_text(news_text: str) -> str:
-    """Перевод на английский с сохранением смысла."""
-    user_text = (
-        "Переведи этот текст на английский язык. Сохрани смысл и стиль. "
-        f"Только результат:\n\n{news_text}"
-    )
+    """Перевод на английский с сохранением смысла (без SMM-обработки)."""
+    from .prompts import TRANSLATE_PROMPT
+    user_text = f"{TRANSLATE_PROMPT}\n\n<source_post>\n{news_text}\n</source_post>"
     result = _call_llm(_build_system_blocks(), user_text)
     logger.info(f"🌐 Текст переведён ({len(result)} символов)")
     return result

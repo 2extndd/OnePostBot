@@ -548,8 +548,8 @@ async def handle_ad(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer("🎯 Добавляю рекламу...")
     try:
         post = posts[index]
-        # Реклама идёт на ОРИГИНАЛЬНОМ тексте, не на отредактированном
-        base_text = post["text"]
+        # Реклама интегрируется в около-финальный текст (рерайт), если он есть
+        base_text = post.get("edited_text") or post["text"]
         new_text = add_ad(base_text)
         posts[index]["edited_text"] = new_text
         await state.update_data(posts=posts)

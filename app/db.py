@@ -169,29 +169,13 @@ def remove_channel(username: str):
 
 # ---------- Settings (key-value) ----------
 
+from . import prompts
+
 DEFAULT_SETTINGS = {
-    "project_context": (
-        "Это новостной Telegram-канал проекта OneProvider.dev — платформы продажи "
-        "API-ключей к LLM (Claude, GPT и др.) для разработчиков. Стилистика: "
-        "технологичная, дружелюбная, понятная разработчикам. Аудитория: "
-        "индивидуальные разработчики, использующие LLM в работе (Claude Code, Cursor, "
-        "кастомные интеграции). Тон: спокойная уверенность, без хайпа."
-    ),
-    "rewrite_prompt": (
-        "Перепиши эту новость на английском языке для нашего канала. Сохрани факты, "
-        "но адаптируй под нашу аудиторию разработчиков. Сделай текст живым и "
-        "читабельным. Только результат, без объяснений."
-    ),
-    "ad_prompt": (
-        "К этому тексту добавь органичную рекламную интеграцию проекта OneProvider.dev "
-        "(платформа доступа к Claude/GPT API). НЕ переписывай основной текст — только "
-        "добавь в конце 1-2 предложения с естественным упоминанием и ссылкой "
-        "https://oneprovider.dev. Верни полный текст с интеграцией."
-    ),
-    "image_prompt": (
-        "Improve this image for a tech news channel: enhance quality, make it brighter "
-        "and more contrasty, keep it clean and professional. Do not add text or watermarks."
-    ),
+    "project_context": prompts.PROJECT_CONTEXT,
+    "rewrite_prompt": prompts.REWRITE_PROMPT,
+    "ad_prompt": prompts.AD_PROMPT,
+    "image_prompt": prompts.IMAGE_PROMPT,
 }
 
 

@@ -20,6 +20,11 @@ from .config import (
     TELETHON_STRING_SESSION,
 )
 from . import db
+from .tg_html import to_telegram_html
+
+
+def _sanitize(text):
+    return to_telegram_html(text or "")
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +138,7 @@ class TGParser:
                         "channel": channel_name,
                         "channel_username": channel_username,
                         "msg_id": g["msg_id"],
-                        "text": g["text"] or "",
+                        "text": _sanitize(g["text"]),
                         "photo_paths": photo_paths,
                         "photo_path": photo_paths[0] if photo_paths else None,
                         "date": g["date"].isoformat() if g["date"] else "",
