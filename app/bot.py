@@ -243,10 +243,10 @@ async def do_parse(message: Message, state: FSMContext, count: int = 10, channel
             await send_error(message.chat.id, "Нет каналов для парсинга. Добавьте через меню «Управление каналами».")
             return
 
-        posts = await parser.fetch_with_photos(channels=channels, since_days=PARSE_DAYS)
+        posts = await parser.fetch_with_photos(channels=channels, limit=max(count, 10))
 
         if not posts:
-            await send_error(message.chat.id, "Нет новых постов за последние дни.")
+            await send_error(message.chat.id, "Нет постов в канале.")
             return
 
         posts = posts[:count]
@@ -350,9 +350,8 @@ async def show_post(parser: TGParser, posts: List[Dict], message: Message, state
         index = 0
 
     post = posts[index]
-    text_preview = post["text"][:200] + ("..." if len(post["text"]) > 200 else "")
+    full_text = post["text"]
     channel_name = post.get("channel", post.get("channel_username", "unknown"))
-    msg_id = post.get("msg_id", "?")
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -361,20 +360,34 @@ async def show_post(parser: TGParser, posts: List[Dict], message: Message, state
                 InlineKeyboardButton(text=f"{index+1}/{len(posts)}", callback_data="noop"),
                 InlineKeyboardButton(text="➡️ Далее", callback_data=f"next_{index}"),
             ],
-            [InlineKeyboardButton(text="📝 Рерайт", callback_data=f"rewrite_{index}")],
-            [InlineKeyboardButton(text="✍️ Рерайт промт", callback_data=f"rewrite_custom_{index}")],
-            [InlineKeyboardButton(text="🎯 Рекламный текст", callback_data=f"ad_{index}")],
-            [InlineKeyboardButton(text="🌐 Перевести", callback_data=f"translate_{index}")],
-            [InlineKeyboardButton(text="🖼 Перегенерировать фото", callback_data=f"regen_photo_{index}")],
-            [InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"publish_{index}")],
+            [
+                InlineKeyboardButton(text="📝 Рерайт", callback_data=f"rewrite_{index}"),
+                InlineKeyboardButton(text="✍️ Рерайт промт", callback_data=f"rewrite_custom_{index}"),
+            ],
+            [
+                InlineKeyboardButton(text="🎯 Реклама", callback_data=f"ad_{index}"),
+                InlineKeyboardButton(text="🌐 Перевести", callback_data=f"translate_{index}"),
+            ],
+            [
+                InlineKeyboardButton(text="🖼 Фото", callback_data=f"regen_photo_{index}"),
+                InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"publish_{index}"),
+            ],
         ],
     )
 
-    caption = f"📰 [{channel_name}]\n\n{text_preview}\n\n🆔 ID: {msg_id}\n📅 {post.get('date', '')}"
     if post.get("photo_path"):
-        await message.answer_photo(photo=_photo(post["photo_path"]), caption=caption, reply_markup=kb)
+        # caption фото ограничен 1024 символами
+        caption = full_text[:1024] if full_text else channel_name
+        await message.answer_photo(
+            photo=_photo(post["photo_path"]), caption=caption,
+            reply_markup=kb, parse_mode="HTML",
+        )
     else:
-        await send_with_topic(message.chat.id, caption, reply_markup=kb)
+        text = full_text[:4096] if full_text else channel_name
+        await bot.send_message(
+            chat_id=message.chat.id, text=text, reply_markup=kb,
+            parse_mode="HTML", message_thread_id=_current_thread.get(),
+        )
 
 
 # ---------- callbacks ----------

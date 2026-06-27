@@ -43,6 +43,8 @@ class TGParser:
                 "Telethon-сессия не авторизована. "
                 "Выполните авторизацию (см. docs / _auth.py) и положите tg_session.session в data/."
             )
+        # HTML parse mode → msg.text возвращает текст с HTML-разметкой (сохраняем форматирование)
+        self.client.parse_mode = "html"
         logger.info("✅ Подключено к Telegram")
 
     async def close(self):
@@ -53,15 +55,15 @@ class TGParser:
         self,
         channels: Optional[List[str]] = None,
         since_days: Optional[int] = None,
-        limit: int = 100,
+        limit: int = 20,
         skip_processed: bool = False,
     ) -> List[Dict]:
         """
         Собираем посты из каналов, скачиваем фото в data/media.
+        limit — сколько последних сообщений просмотреть в каждом канале.
         Возвращаем список словарей с ключом photo_path (путь к локальному файлу или None).
         """
         channels = channels or PARSE_CHANNELS
-        since = datetime.now(timezone.utc) - timedelta(days=since_days or PARSE_DAYS)
         all_posts: List[Dict] = []
 
         for ch in channels:
@@ -74,10 +76,6 @@ class TGParser:
                 async for msg in self.client.iter_messages(entity, limit=limit):
                     if not isinstance(msg, Message):
                         continue
-
-                    msg_date = msg.date
-                    if msg_date and msg_date < since:
-                        break  # сообщения идут от новых к старым
 
                     if not (msg.text or msg.media):
                         continue
