@@ -375,11 +375,34 @@ async def show_post(parser: TGParser, posts: List[Dict], message: Message, state
         ],
     )
 
-    if post.get("photo_path"):
-        # caption фото ограничен 1024 символами
+    photo_paths = post.get("photo_paths") or ([post["photo_path"]] if post.get("photo_path") else [])
+
+    if len(photo_paths) > 1:
+        # Альбом: отправляем media_group (без кнопок — Telegram не разрешает), затем кнопки отдельно
+        from aiogram.types import InputMediaPhoto
+        media = []
+        caption = full_text[:1024] if full_text else channel_name
+        for i, p in enumerate(photo_paths[:10]):
+            if i == 0:
+                media.append(InputMediaPhoto(media=_photo(p), caption=caption, parse_mode="HTML"))
+            else:
+                media.append(InputMediaPhoto(media=_photo(p)))
+        try:
+            await bot.send_media_group(
+                chat_id=message.chat.id, media=media,
+                message_thread_id=_current_thread.get(),
+            )
+        except Exception as e:
+            logger.error(f"send_media_group error: {e}")
+        # Кнопки отдельным сообщением
+        await bot.send_message(
+            chat_id=message.chat.id, text=f"⬆️ Пост {index+1}/{len(posts)} — действия:",
+            reply_markup=kb, message_thread_id=_current_thread.get(),
+        )
+    elif photo_paths:
         caption = full_text[:1024] if full_text else channel_name
         await message.answer_photo(
-            photo=_photo(post["photo_path"]), caption=caption,
+            photo=_photo(photo_paths[0]), caption=caption,
             reply_markup=kb, parse_mode="HTML",
         )
     else:

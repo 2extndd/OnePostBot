@@ -69,8 +69,9 @@ class TGParser:
     ) -> List[Dict]:
         """
         Собираем посты из каналов, скачиваем фото в data/media.
-        limit — сколько последних сообщений просмотреть в каждом канале.
-        Возвращаем список словарей с ключом photo_path (путь к локальному файлу или None).
+        Альбомы (несколько фото с одним grouped_id) объединяются в один пост.
+        limit — сколько последних ПОСТОВ (не сообщений) вернуть на канал.
+        Возвращаем список словарей с photo_paths (список путей) и photo_path (первый, для совместимости).
         """
         channels = channels or PARSE_CHANNELS
         all_posts: List[Dict] = []
@@ -82,29 +83,64 @@ class TGParser:
                 channel_username = getattr(entity, "username", None) or ch
                 logger.info(f"📸 Читаем канал: {ch}")
 
-                async for msg in self.client.iter_messages(entity, limit=limit):
+                # Читаем больше сообщений, чем нужно постов (альбомы съедают несколько сообщений)
+                raw_limit = max(limit * 4, 40)
+                # Группируем по grouped_id
+                groups: Dict = {}
+                order: List = []
+
+                async for msg in self.client.iter_messages(entity, limit=raw_limit):
                     if not isinstance(msg, Message):
                         continue
-
                     if not (msg.text or msg.media):
                         continue
 
-                    if skip_processed and db.is_processed(channel_username, msg.id):
+                    gid = msg.grouped_id or msg.id  # одиночные посты — по своему id
+                    if gid not in groups:
+                        # достаточно групп — останавливаемся на новой группе
+                        if len(order) >= limit:
+                            break
+                        groups[gid] = {
+                            "messages": [],
+                            "text": "",
+                            "msg_id": msg.id,
+                            "date": msg.date,
+                        }
+                        order.append(gid)
+                    g = groups[gid]
+                    g["messages"].append(msg)
+                    # Текст альбома обычно в одном из сообщений — берём непустой
+                    if msg.text and not g["text"]:
+                        g["text"] = msg.text
+                    # msg_id/date — минимальные (первое сообщение группы)
+                    if msg.id < g["msg_id"]:
+                        g["msg_id"] = msg.id
+                        g["date"] = msg.date
+
+                # Берём только нужное число постов (свежие — первые в order)
+                for gid in order[:limit]:
+                    g = groups[gid]
+                    if skip_processed and db.is_processed(channel_username, g["msg_id"]):
                         continue
 
-                    photo_path = await self._download_photo(msg)
+                    photo_paths = []
+                    for m in g["messages"]:
+                        p = await self._download_photo(m)
+                        if p:
+                            photo_paths.append(p)
 
                     all_posts.append({
                         "channel": channel_name,
                         "channel_username": channel_username,
-                        "msg_id": msg.id,
-                        "text": msg.text or "",
-                        "photo_path": photo_path,
-                        "date": msg.date.isoformat() if msg.date else "",
+                        "msg_id": g["msg_id"],
+                        "text": g["text"] or "",
+                        "photo_paths": photo_paths,
+                        "photo_path": photo_paths[0] if photo_paths else None,
+                        "date": g["date"].isoformat() if g["date"] else "",
                     })
 
                     if skip_processed:
-                        db.mark_seen(channel_username, msg.id)
+                        db.mark_seen(channel_username, g["msg_id"])
             except Exception as e:
                 logger.error(f"❌ Ошибка при чтении {ch}: {e}")
 
