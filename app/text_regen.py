@@ -118,10 +118,15 @@ def add_ad(text: str) -> str:
 
 
 def translate_text(news_text: str) -> str:
-    """Перевод на английский с сохранением смысла (без SMM-обработки)."""
+    """Перевод на английский — БЕЗ SMM-обработки, минимальный system (без project_context)."""
     from .prompts import TRANSLATE_PROMPT
+    # Чистый system без SMM-контекста, чтобы перевод был дословным
+    system_blocks = [{
+        "type": "text",
+        "text": "Ты — профессиональный переводчик. Переводишь точно, без отсебятины.",
+    }]
     user_text = f"{TRANSLATE_PROMPT}\n\n<source_post>\n{news_text}\n</source_post>"
-    result = _call_llm(_build_system_blocks(), user_text)
+    result = _call_llm(system_blocks, user_text)
     logger.info(f"🌐 Текст переведён ({len(result)} символов)")
     return result
 

@@ -140,7 +140,7 @@ async def thread_context_middleware(handler, event, data):
         _current_thread.reset(token)
 
 
-async def send_with_topic(chat_id: int, text: str, reply_markup=None, thread_id=_UNSET):
+async def send_with_topic(chat_id: int, text: str, reply_markup=None, thread_id=_UNSET, parse_mode=None):
     """
     Отправить сообщение.
     thread_id:
@@ -154,6 +154,8 @@ async def send_with_topic(chat_id: int, text: str, reply_markup=None, thread_id=
             kwargs["message_thread_id"] = tid
         if reply_markup:
             kwargs["reply_markup"] = reply_markup
+        if parse_mode:
+            kwargs["parse_mode"] = parse_mode
         logger.info(f"➡️ send chat={chat_id} thread={tid} has_kb={reply_markup is not None}")
         await bot.send_message(**kwargs)
 
@@ -462,12 +464,13 @@ async def handle_rewrite(callback: types.CallbackQuery, state: FSMContext):
         new_text = rewrite_news(post["text"])
         # Сохраняем переписанный текст в пост, чтобы реклама/публикация работали с ним
         posts[index]["edited_text"] = new_text
+        posts[index]["showing_original"] = False
         await state.update_data(posts=posts)
         caption = f"✅ Рерайт:\n\n{new_text}"
         if post.get("photo_path"):
-            await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=caption[:1024])
+            await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=caption[:1024], parse_mode="HTML")
         else:
-            await send_with_topic(callback.message.chat.id, caption)
+            await send_with_topic(callback.message.chat.id, caption, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Rewrite error: {e}")
         await send_error(callback.message.chat.id, f"{e}")
@@ -500,12 +503,13 @@ async def handle_rewrite_input(message: Message, state: FSMContext):
         post = posts[index]
         new_text = rewrite_news(post["text"], custom_prompt=prompt)
         posts[index]["edited_text"] = new_text
+        posts[index]["showing_original"] = False
         await state.update_data(posts=posts)
         caption = f"✅ Рерайт (по запросу):\n\n{new_text}"
         if post.get("photo_path"):
-            await message.answer_photo(photo=_photo(post["photo_path"]), caption=caption[:1024])
+            await message.answer_photo(photo=_photo(post["photo_path"]), caption=caption[:1024], parse_mode="HTML")
         else:
-            await send_with_topic(message.chat.id, caption)
+            await send_with_topic(message.chat.id, caption, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Rewrite custom error: {e}")
         await send_error(message.chat.id, f"{e}")
@@ -525,14 +529,17 @@ async def handle_translate(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer("🔄 Перевожу...")
     try:
         post = posts[index]
-        translated = translate_text(post["text"])
+        # Переводим текущую версию (рерайт, если есть), иначе оригинал
+        base_text = post["text"] if post.get("showing_original") else (post.get("edited_text") or post["text"])
+        translated = translate_text(base_text)
         posts[index]["edited_text"] = translated
+        posts[index]["showing_original"] = False
         await state.update_data(posts=posts)
         caption = f"✅ Перевод (EN):\n\n{translated}"
         if post.get("photo_path"):
-            await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=caption[:1024])
+            await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=caption[:1024], parse_mode="HTML")
         else:
-            await send_with_topic(callback.message.chat.id, caption)
+            await send_with_topic(callback.message.chat.id, caption, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Translate error: {e}")
         await send_error(callback.message.chat.id, f"{e}")
@@ -551,16 +558,17 @@ async def handle_ad(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer("🎯 Добавляю рекламу...")
     try:
         post = posts[index]
-        # Реклама интегрируется в около-финальный текст (рерайт), если он есть
-        base_text = post.get("edited_text") or post["text"]
+        # Реклама в текущую версию: оригинал (если свитч) или рерайт
+        base_text = post["text"] if post.get("showing_original") else (post.get("edited_text") or post["text"])
         new_text = add_ad(base_text)
         posts[index]["edited_text"] = new_text
+        posts[index]["showing_original"] = False
         await state.update_data(posts=posts)
         caption = f"✅ С рекламной интеграцией:\n\n{new_text}"
         if post.get("photo_path"):
-            await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=caption[:1024])
+            await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=caption[:1024], parse_mode="HTML")
         else:
-            await send_with_topic(callback.message.chat.id, caption)
+            await send_with_topic(callback.message.chat.id, caption, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Ad error: {e}")
         await send_error(callback.message.chat.id, f"{e}")
@@ -599,7 +607,7 @@ async def handle_original(callback: types.CallbackQuery, state: FSMContext):
     if post.get("photo_path"):
         await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=caption[:1024], parse_mode="HTML")
     else:
-        await send_with_topic(callback.message.chat.id, caption)
+        await send_with_topic(callback.message.chat.id, caption, parse_mode="HTML")
 
 
 @dp.callback_query(lambda c: c.data.startswith("regen_photo_"))
@@ -621,7 +629,7 @@ async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMConte
         image_prompt = db.get_setting("image_prompt")
         new_photo = regenerate_photo(post["photo_path"], image_prompt)
         caption = f"✅ Фото переработано!\n\n{post['text'][:200]}"
-        await callback.message.answer_photo(photo=_photo(new_photo), caption=caption)
+        await callback.message.answer_photo(photo=_photo(new_photo), caption=caption[:1024], parse_mode="HTML")
     except Exception as e:
         logger.error(f"Regen photo error: {e}")
         await callback.answer(f"❌ Ошибка: {e}")
