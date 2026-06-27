@@ -188,6 +188,10 @@ DEFAULT_SETTINGS = {
         "добавь в конце 1-2 предложения с естественным упоминанием и ссылкой "
         "https://oneprovider.dev. Верни полный текст с интеграцией."
     ),
+    "image_prompt": (
+        "Improve this image for a tech news channel: enhance quality, make it brighter "
+        "and more contrasty, keep it clean and professional. Do not add text or watermarks."
+    ),
 }
 
 

@@ -101,6 +101,7 @@ def settings_menu_kb():
             InlineKeyboardButton(text="📝 Промпт рерайта", callback_data="settings_rewrite_prompt"),
             InlineKeyboardButton(text="🎯 Промпт рекламы", callback_data="settings_ad_prompt"),
         ],
+        [InlineKeyboardButton(text="🖼 Промпт изображений", callback_data="settings_image_prompt")],
         [InlineKeyboardButton(text="👁 Показать все", callback_data="settings_show_all")],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="menu_main")],
     ])
@@ -534,7 +535,8 @@ async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMConte
 
     await callback.answer("🖼 Перегенерирую...")
     try:
-        new_photo = regenerate_photo(post["photo_path"], "Улучши качество, сделай ярче и контрастнее")
+        image_prompt = db.get_setting("image_prompt")
+        new_photo = regenerate_photo(post["photo_path"], image_prompt)
         caption = f"✅ Фото переработано!\n\n{post['text'][:200]}"
         await callback.message.answer_photo(photo=new_photo, caption=caption)
     except Exception as e:
@@ -730,6 +732,7 @@ _SETTING_KEYS = {
     "settings_project_context": ("project_context", "📄 Контекст проекта"),
     "settings_rewrite_prompt": ("rewrite_prompt", "📝 Промпт рерайта"),
     "settings_ad_prompt": ("ad_prompt", "🎯 Промпт рекламы"),
+    "settings_image_prompt": ("image_prompt", "🖼 Промпт изображений"),
 }
 
 
@@ -765,7 +768,8 @@ async def cb_show_settings(callback: types.CallbackQuery):
     await cb_send(callback, 
         f"📄 КОНТЕКСТ ПРОЕКТА:\n{s['project_context']}\n\n"
         f"📝 ПРОМПТ РЕРАЙТА:\n{s['rewrite_prompt']}\n\n"
-        f"🎯 ПРОМПТ РЕКЛАМЫ:\n{s['ad_prompt']}",
+        f"🎯 ПРОМПТ РЕКЛАМЫ:\n{s['ad_prompt']}\n\n"
+        f"🖼 ПРОМПТ ИЗОБРАЖЕНИЙ:\n{s['image_prompt']}",
         reply_markup=settings_menu_kb(),
     )
     await callback.answer()
