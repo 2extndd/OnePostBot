@@ -14,6 +14,7 @@ for _k in ("BOT_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
 TELEGRAM_API_ID = int(os.environ.get("TELEGRAM_API_ID", "36012732"))
 TELEGRAM_API_HASH = os.environ.get("TELEGRAM_API_HASH", "")
 TELEPHONE = os.environ.get("TELEPHONE", "")
+TELETHON_STRING_SESSION = os.environ.get("TELETHON_STRING_SESSION", "")
 
 # Channels
 PARSE_CHANNELS = [c.strip() for c in os.environ.get("PARSE_CHANNELS", "").split(",") if c.strip()]

@@ -17,6 +17,7 @@ from .config import (
     PARSE_CHANNELS,
     PARSE_DAYS,
     DATA_DIR,
+    TELETHON_STRING_SESSION,
 )
 from . import db
 
@@ -29,11 +30,19 @@ MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 class TGParser:
     def __init__(self, phone: str = ""):
         self.phone = phone
-        self.client = TelegramClient(
-            str(SESSION_FILE),
-            TELEGRAM_API_ID,
-            TELEGRAM_API_HASH,
-        )
+        if TELETHON_STRING_SESSION:
+            from telethon.sessions import StringSession
+            self.client = TelegramClient(
+                StringSession(TELETHON_STRING_SESSION),
+                TELEGRAM_API_ID,
+                TELEGRAM_API_HASH,
+            )
+        else:
+            self.client = TelegramClient(
+                str(SESSION_FILE),
+                TELEGRAM_API_ID,
+                TELEGRAM_API_HASH,
+            )
 
     async def start(self):
         """Подключаемся к Telegram. Не запускает интерактивный логин в Docker."""
