@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS queue (
 );
 
 CREATE INDEX IF NOT EXISTS idx_queue_status ON queue(status);
+
+CREATE TABLE IF NOT EXISTS channels (
+    username TEXT PRIMARY KEY,
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -129,3 +134,28 @@ def update_text(post_id: int, text: str, photo_path: Optional[str] = None):
             )
         else:
             conn.execute("UPDATE queue SET text = ? WHERE id = ?", (text, post_id))
+
+
+# ---------- Channels ----------
+
+def get_channels() -> List[str]:
+    """Возвращает список всех каналов."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT username FROM channels ORDER BY added_at").fetchall()
+    return [r["username"] for r in rows]
+
+
+def add_channel(username: str):
+    """Добавляет канал в список."""
+    username = username.strip().lstrip("@")
+    with _connect() as conn:
+        conn.execute("INSERT OR IGNORE INTO channels (username) VALUES (?)", (username,))
+    logger.info(f"➕ Канал @{username} добавлен")
+
+
+def remove_channel(username: str):
+    """Удаляет канал из списка."""
+    username = username.strip().lstrip("@")
+    with _connect() as conn:
+        conn.execute("DELETE FROM channels WHERE username = ?", (username,))
+    logger.info(f"➖ Канал @{username} удалён")

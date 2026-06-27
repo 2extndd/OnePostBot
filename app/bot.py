@@ -113,6 +113,10 @@ async def cmd_help(message: Message):
         "📋 Команды бота:\n\n"
         "/parse N — показать последние N постов\n"
         "/parse @channel N — парсить конкретный канал\n\n"
+        "📚 Управление каналами:\n"
+        "/channels — список каналов\n"
+        "/addchannel @канал — добавить канал\n"
+        "/delchannel @канал — удалить канал\n\n"
         "При показе постов доступны кнопки:\n"
         "• Рерайт — переписать текст (на английском)\n"
         "• Рерайт промт — переписать с твоим промптом\n"
@@ -153,9 +157,14 @@ async def cmd_parse(message: Message, state: FSMContext):
     await parser.start()
 
     try:
-        channels = [channel] if channel else PARSE_CHANNELS
+        if channel:
+            channels = [channel]
+        else:
+            # Берём каналы из БД, fallback на конфиг
+            db_channels = db.get_channels()
+            channels = db_channels if db_channels else PARSE_CHANNELS
         if not channels:
-            await send_error(message.chat.id, "Нет каналов для парсинга. Укажите канал или добавьте в config.")
+            await send_error(message.chat.id, "Нет каналов для парсинга. Добавьте через /addchannel @канал")
             return
 
         posts = await parser.fetch_with_photos(channels=channels, since_days=PARSE_DAYS)
@@ -188,6 +197,43 @@ async def cmd_config(message: Message):
         f"Дней назад: {PARSE_DAYS}\n"
         f"Задержка постинга: {POST_DELAY_MIN}-{POST_DELAY_MAX} мин",
     )
+
+
+# ---------- channel management ----------
+
+@dp.message(Command("channels"))
+async def cmd_channels(message: Message):
+    """Показать список каналов."""
+    channels = db.get_channels()
+    if not channels:
+        await send_with_topic(message.chat.id, "📭 Список каналов пуст. Добавьте через /addchannel @канал")
+        return
+    text = "📚 Каналы для парсинга:\n" + "\n".join(f"• @{ch}" for ch in channels)
+    await send_with_topic(message.chat.id, text)
+
+
+@dp.message(Command("addchannel"))
+async def cmd_addchannel(message: Message):
+    """Добавить канал в список."""
+    args = message.text.split()
+    if len(args) < 2:
+        await send_error(message.chat.id, "Укажите канал: /addchannel @канал")
+        return
+    username = args[1].strip().lstrip("@")
+    db.add_channel(username)
+    await send_with_topic(message.chat.id, f"✅ Канал @{username} добавлен")
+
+
+@dp.message(Command("delchannel"))
+async def cmd_delchannel(message: Message):
+    """Удалить канал из списка."""
+    args = message.text.split()
+    if len(args) < 2:
+        await send_error(message.chat.id, "Укажите канал: /delchannel @канал")
+        return
+    username = args[1].strip().lstrip("@")
+    db.remove_channel(username)
+    await send_with_topic(message.chat.id, f"✅ Канал @{username} удалён")
 
 
 # ---------- post display ----------
