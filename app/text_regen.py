@@ -13,7 +13,7 @@
 import logging
 from anthropic import Anthropic
 
-from .config import ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY, LLM_MODEL
+from .config import ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY, LLM_MODEL, LLM_THINKING_BUDGET
 from . import db
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,15 @@ def _get_client():
             api_key=ANTHROPIC_API_KEY,
         )
     return _client
+
+
+def _extract_text(response) -> str:
+    """Извлекает текстовый блок из ответа (пропуская thinking-блоки)."""
+    for block in response.content:
+        if getattr(block, "type", None) == "text":
+            return block.text.strip()
+    # fallback
+    return response.content[-1].text.strip() if response.content else ""
 
 
 def _build_system_blocks(extra: str = "") -> list:
@@ -56,15 +65,22 @@ def _build_system_blocks(extra: str = "") -> list:
 
 
 def _call_llm(system_blocks: list, user_text: str, max_tokens: int = 1500) -> str:
-    """Единая точка вызова LLM с обработкой ответа."""
-    response = _get_client().messages.create(
-        model=LLM_MODEL,
-        max_tokens=max_tokens,
-        system=system_blocks,
-        messages=[{"role": "user", "content": user_text}],
-    )
-    result = response.content[0].text.strip()
-    # Логируем токены / cache
+    """Единая точка вызова LLM с обработкой ответа и extended thinking."""
+    kwargs = {
+        "model": LLM_MODEL,
+        "system": system_blocks,
+        "messages": [{"role": "user", "content": user_text}],
+    }
+
+    if LLM_THINKING_BUDGET > 0:
+        # max_tokens должен превышать budget_tokens
+        kwargs["max_tokens"] = max_tokens + LLM_THINKING_BUDGET
+        kwargs["thinking"] = {"type": "enabled", "budget_tokens": LLM_THINKING_BUDGET}
+    else:
+        kwargs["max_tokens"] = max_tokens
+
+    response = _get_client().messages.create(**kwargs)
+    result = _extract_text(response)
     usage = getattr(response, "usage", None)
     if usage:
         logger.info(
