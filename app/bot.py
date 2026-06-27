@@ -31,7 +31,7 @@ from .config import (
     TELEPHONE,
 )
 from .parser import TGParser
-from .text_regen import regenerate_text, generate_caption_for_photo
+from .text_regen import regenerate_text, generate_caption_for_photo, rewrite_news, add_ad, translate_text
 from .image_regen import regenerate_photo
 from .publisher import post_via_bot
 from .scheduler import enqueue_post, get_pending_posts, approve_post, mark_published, mark_failed, get_post, update_post
@@ -61,7 +61,23 @@ class ChannelState(StatesGroup):
     waiting_del = State()
 
 
+class SettingsState(StatesGroup):
+    waiting_value = State()
+
+
 # ---------- keyboards ----------
+
+def settings_menu_kb():
+    """Меню настроек промптов."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📄 Контекст проекта")],
+            [KeyboardButton(text="📝 Промпт рерайта"), KeyboardButton(text="🎯 Промпт рекламы")],
+            [KeyboardButton(text="👁 Показать все настройки")],
+            [KeyboardButton(text="🔙 Главное меню")],
+        ],
+        resize_keyboard=True,
+    )
 
 def main_menu_kb():
     """Главное меню."""
@@ -279,6 +295,7 @@ async def show_post(parser: TGParser, posts: List[Dict], message: Message, state
             ],
             [InlineKeyboardButton(text="📝 Рерайт", callback_data=f"rewrite_{index}")],
             [InlineKeyboardButton(text="✍️ Рерайт промт", callback_data=f"rewrite_custom_{index}")],
+            [InlineKeyboardButton(text="🎯 Рекламный текст", callback_data=f"ad_{index}")],
             [InlineKeyboardButton(text="🌐 Перевести", callback_data=f"translate_{index}")],
             [InlineKeyboardButton(text="🖼 Перегенерировать фото", callback_data=f"regen_photo_{index}")],
             [InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"publish_{index}")],
@@ -335,15 +352,17 @@ async def handle_rewrite(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer("🔄 Переписываю...")
     try:
         post = posts[index]
-        new_text = regenerate_text(post["text"], "Переведи и перепиши на английский")
-        caption = f"✅ Рерайт (EN):\n\n{new_text}"
+        new_text = rewrite_news(post["text"])
+        # Сохраняем переписанный текст в пост, чтобы реклама/публикация работали с ним
+        posts[index]["edited_text"] = new_text
+        await state.update_data(posts=posts)
+        caption = f"✅ Рерайт:\n\n{new_text}"
         if post.get("photo_path"):
-            await callback.message.answer_photo(photo=post["photo_path"], caption=caption)
+            await callback.message.answer_photo(photo=post["photo_path"], caption=caption[:1024])
         else:
             await send_with_topic(callback.message.chat.id, caption)
     except Exception as e:
         logger.error(f"Rewrite error: {e}")
-        await callback.answer(f"❌ Ошибка: {e}")
         await send_error(callback.message.chat.id, f"{e}")
 
 
@@ -372,10 +391,12 @@ async def handle_rewrite_input(message: Message, state: FSMContext):
     await send_with_topic(message.chat.id, "🔄 Переписываю...")
     try:
         post = posts[index]
-        new_text = regenerate_text(post["text"], prompt)
-        caption = f"✅ Рерайт:\n\n{prompt}\n\n{new_text}"
+        new_text = rewrite_news(post["text"], custom_prompt=prompt)
+        posts[index]["edited_text"] = new_text
+        await state.update_data(posts=posts)
+        caption = f"✅ Рерайт (по запросу):\n\n{new_text}"
         if post.get("photo_path"):
-            await message.answer_photo(photo=post["photo_path"], caption=caption)
+            await message.answer_photo(photo=post["photo_path"], caption=caption[:1024])
         else:
             await send_with_topic(message.chat.id, caption)
     except Exception as e:
@@ -397,15 +418,44 @@ async def handle_translate(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer("🔄 Перевожу...")
     try:
         post = posts[index]
-        translated = regenerate_text(post["text"], "Переведи на английский язык. Сохрани смысл.")
+        translated = translate_text(post["text"])
+        posts[index]["edited_text"] = translated
+        await state.update_data(posts=posts)
         caption = f"✅ Перевод (EN):\n\n{translated}"
         if post.get("photo_path"):
-            await callback.message.answer_photo(photo=post["photo_path"], caption=caption)
+            await callback.message.answer_photo(photo=post["photo_path"], caption=caption[:1024])
         else:
             await send_with_topic(callback.message.chat.id, caption)
     except Exception as e:
         logger.error(f"Translate error: {e}")
-        await callback.answer(f"❌ Ошибка: {e}")
+        await send_error(callback.message.chat.id, f"{e}")
+
+
+@dp.callback_query(lambda c: c.data.startswith("ad_"))
+async def handle_ad(callback: types.CallbackQuery, state: FSMContext):
+    """Добавить рекламную интеграцию к посту."""
+    index = int(callback.data.split("_")[-1])
+    state_data = await state.get_data()
+    posts = state_data.get("posts", [])
+    if index >= len(posts):
+        await callback.answer("❌ Пост не найден")
+        return
+
+    await callback.answer("🎯 Добавляю рекламу...")
+    try:
+        post = posts[index]
+        # Берём уже отредактированный текст, если есть, иначе оригинал
+        base_text = post.get("edited_text") or post["text"]
+        new_text = add_ad(base_text)
+        posts[index]["edited_text"] = new_text
+        await state.update_data(posts=posts)
+        caption = f"✅ С рекламной интеграцией:\n\n{new_text}"
+        if post.get("photo_path"):
+            await callback.message.answer_photo(photo=post["photo_path"], caption=caption[:1024])
+        else:
+            await send_with_topic(callback.message.chat.id, caption)
+    except Exception as e:
+        logger.error(f"Ad error: {e}")
         await send_error(callback.message.chat.id, f"{e}")
 
 
@@ -446,15 +496,15 @@ async def handle_publish(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer("✅ Добавлено в очередь!")
     post = posts[index]
 
-    # Регенерируем текст
-    new_text = regenerate_text(post["text"], "Переписываем пост для публикации")
+    # Используем отредактированный текст (рерайт/перевод/реклама), иначе оригинал
+    final_text = post.get("edited_text") or post["text"]
 
-    post_id = enqueue_post(new_text, post.get("photo_path"), post.get("channel", ""), post["msg_id"])
+    post_id = enqueue_post(final_text, post.get("photo_path"), post.get("channel", ""), post["msg_id"])
 
     await send_with_topic(
         callback.message.chat.id,
         f"📝 Пост #{post_id} добавлен в очередь.\n\n"
-        f"Нажмите /publish чтобы опубликовать одобренные посты.",
+        f"Нажмите «📤 Опубликовать» в меню, чтобы опубликовать во все топики.",
     )
 
 
@@ -570,9 +620,64 @@ async def menu_settings(message: Message):
         f"📚 Каналы: {ch_text}\n"
         f"📍 Топики публикации:\n{topics_text}\n"
         f"📅 Дней назад: {PARSE_DAYS}\n"
-        f"⏱ Задержка постинга: {POST_DELAY_MIN}-{POST_DELAY_MAX} мин",
-        reply_markup=main_menu_kb(),
+        f"⏱ Задержка постинга: {POST_DELAY_MIN}-{POST_DELAY_MAX} мин\n\n"
+        f"Ниже — настройка AI-промптов:",
+        reply_markup=settings_menu_kb(),
     )
+
+
+# Маппинг кнопок настроек на ключи в БД
+_SETTING_KEYS = {
+    "📄 Контекст проекта": "project_context",
+    "📝 Промпт рерайта": "rewrite_prompt",
+    "🎯 Промпт рекламы": "ad_prompt",
+}
+
+
+@dp.message(F.text.in_(list(_SETTING_KEYS.keys())))
+async def menu_edit_setting(message: Message, state: FSMContext):
+    key = _SETTING_KEYS[message.text]
+    current = db.get_setting(key)
+    await state.set_state(SettingsState.waiting_value)
+    await state.update_data(setting_key=key)
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 Настройки")]], resize_keyboard=True)
+    await send_with_topic(
+        message.chat.id,
+        f"Текущее значение «{message.text}»:\n\n{current}\n\n"
+        f"✍️ Отправьте новый текст, чтобы заменить:",
+        reply_markup=kb,
+    )
+
+
+@dp.message(SettingsState.waiting_value)
+async def menu_save_setting(message: Message, state: FSMContext):
+    if message.text in ("🔙 Настройки", "🔙 Главное меню"):
+        await state.clear()
+        await send_with_topic(message.chat.id, "⚙️ Настройки промптов:", reply_markup=settings_menu_kb())
+        return
+    data = await state.get_data()
+    key = data.get("setting_key")
+    db.set_setting(key, message.text)
+    await state.clear()
+    await send_with_topic(message.chat.id, f"✅ Сохранено!", reply_markup=settings_menu_kb())
+
+
+@dp.message(F.text == "👁 Показать все настройки")
+async def menu_show_settings(message: Message):
+    s = db.get_all_settings()
+    await send_with_topic(
+        message.chat.id,
+        f"📄 КОНТЕКСТ ПРОЕКТА:\n{s['project_context']}\n\n"
+        f"📝 ПРОМПТ РЕРАЙТА:\n{s['rewrite_prompt']}\n\n"
+        f"🎯 ПРОМПТ РЕКЛАМЫ:\n{s['ad_prompt']}",
+        reply_markup=settings_menu_kb(),
+    )
+
+
+@dp.message(F.text == "🔙 Настройки")
+async def menu_back_settings(message: Message, state: FSMContext):
+    await state.clear()
+    await send_with_topic(message.chat.id, "⚙️ Настройки промптов:", reply_markup=settings_menu_kb())
 
 
 @dp.message(F.text == "❓ Помощь")
@@ -581,14 +686,16 @@ async def menu_help(message: Message):
         message.chat.id,
         "📋 Как пользоваться:\n\n"
         "1️⃣ «Управление каналами» → добавьте каналы для парсинга\n"
-        "2️⃣ «Парсить посты» → выберите количество постов\n"
-        "3️⃣ Под каждым постом кнопки:\n"
-        "   • Рерайт — переписать + перевести на английский\n"
+        "2️⃣ «Настройки» → настройте контекст проекта и промпты\n"
+        "3️⃣ «Парсить посты» → выберите количество постов\n"
+        "4️⃣ Под каждым постом кнопки:\n"
+        "   • Рерайт — переписать по контексту проекта\n"
         "   • Рерайт промт — переписать по вашему запросу\n"
+        "   • 🎯 Рекламный текст — добавить интеграцию проекта\n"
         "   • Перевести — перевести на английский\n"
         "   • Перегенерировать фото — улучшить изображение\n"
         "   • Опубликовать — добавить в очередь\n"
-        "4️⃣ «Опубликовать» → публикация во все топики",
+        "5️⃣ «Опубликовать» → публикация во все топики",
         reply_markup=main_menu_kb(),
     )
 

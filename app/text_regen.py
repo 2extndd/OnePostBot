@@ -1,15 +1,25 @@
 """
 Регенерация текста через OneProvider (Anthropic-compatible).
+
+Архитектура промптов (3 уровня):
+  1. project_context — общий контекст проекта (system prompt, кэшируется)
+  2. rewrite_prompt  — инструкция для рерайта основного текста
+  3. ad_prompt       — инструкция для добавления рекламной интеграции
+
+Контекст проекта передаётся в system prompt с пометкой cache_control,
+чтобы Anthropic кэшировал его и не тратил токены на повторных запросах.
 """
 
 import logging
 from anthropic import Anthropic
 
 from .config import ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY, LLM_MODEL
+from . import db
 
 logger = logging.getLogger(__name__)
 
 _client = None
+
 
 def _get_client():
     """Ленивая инициализация Anthropic клиента."""
@@ -24,49 +34,99 @@ def _get_client():
     return _client
 
 
+def _build_system_blocks(extra: str = "") -> list:
+    """
+    System prompt с project_context. Помечаем cache_control для кэширования.
+    """
+    project_context = db.get_setting("project_context")
+    system_text = (
+        "Ты — редактор контента для Telegram-канала.\n\n"
+        f"ОБЩИЙ КОНТЕКСТ ПРОЕКТА:\n{project_context}"
+    )
+    if extra:
+        system_text += f"\n\n{extra}"
+
+    return [
+        {
+            "type": "text",
+            "text": system_text,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+def _call_llm(system_blocks: list, user_text: str, max_tokens: int = 1500) -> str:
+    """Единая точка вызова LLM с обработкой ответа."""
+    response = _get_client().messages.create(
+        model=LLM_MODEL,
+        max_tokens=max_tokens,
+        system=system_blocks,
+        messages=[{"role": "user", "content": user_text}],
+    )
+    result = response.content[0].text.strip()
+    # Логируем токены / cache
+    usage = getattr(response, "usage", None)
+    if usage:
+        logger.info(
+            f"✨ LLM: in={getattr(usage,'input_tokens','?')} "
+            f"out={getattr(usage,'output_tokens','?')} "
+            f"cache_read={getattr(usage,'cache_read_input_tokens','?')}"
+        )
+    return result
+
+
+def rewrite_news(news_text: str, custom_prompt: str = None) -> str:
+    """
+    Рерайт основного текста новости.
+    Использует rewrite_prompt из настроек (или custom_prompt, если задан).
+    """
+    instruction = custom_prompt or db.get_setting("rewrite_prompt")
+    user_text = f"{instruction}\n\nИСХОДНАЯ НОВОСТЬ:\n{news_text}"
+    result = _call_llm(_build_system_blocks(), user_text)
+    logger.info(f"📝 Новость переписана ({len(result)} символов)")
+    return result
+
+
+def add_ad(text: str) -> str:
+    """
+    Добавляет рекламную интеграцию к тексту.
+    Использует ad_prompt из настроек. НЕ переписывает основной текст.
+    """
+    instruction = db.get_setting("ad_prompt")
+    user_text = f"{instruction}\n\nТЕКСТ ПОСТА:\n{text}"
+    result = _call_llm(_build_system_blocks(), user_text)
+    logger.info(f"🎯 Реклама добавлена ({len(result)} символов)")
+    return result
+
+
+def translate_text(news_text: str) -> str:
+    """Перевод на английский с сохранением смысла."""
+    user_text = (
+        "Переведи этот текст на английский язык. Сохрани смысл и стиль. "
+        f"Только результат:\n\n{news_text}"
+    )
+    result = _call_llm(_build_system_blocks(), user_text)
+    logger.info(f"🌐 Текст переведён ({len(result)} символов)")
+    return result
+
+
+# ---------- Обратная совместимость ----------
+
 def regenerate_text(original_text: str, context: str = "") -> str:
     """
-    Переписываем текст поста.
-    Сохраняем смысл, но делаем уникальный контент.
+    Legacy-обёртка. Если context выглядит как кастомный промпт — используем его,
+    иначе берём дефолтный rewrite_prompt.
     """
-    prompt = f"""Перепиши этот текст поста. Сохрани основной смысл и факты, но:
-- Используй другой стиль изложения
-- Добавь вводную часть
-- Если есть фото — упомяни его
-- Сделай текст более интересным и читабельным
-- Длина — примерно как оригинал
-
-Контекст: {context}
-
-Оригинал:
-{original_text}
-
-Только результат, без объяснений:"""
-
-    response = _get_client().messages.create(
-        model=LLM_MODEL,
-        max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    regenerated = response.content[0].text.strip()
-    logger.info(f"✨ Текст переписан ({len(regenerated)} символов)")
-    return regenerated
+    if context and context.strip():
+        return rewrite_news(original_text, custom_prompt=context)
+    return rewrite_news(original_text)
 
 
-def generate_caption_for_photo(photo_description: str, channel_context: str) -> str:
+def generate_caption_for_photo(photo_description: str, channel_context: str = "") -> str:
     """Генерируем подпись к переработанному фото."""
-    prompt = f"""Напиши короткий привлекательный пост-подпись для фото.
-
-Контекст канала: {channel_context}
-Описание фото: {photo_description}
-
-Только пост, без объяснений. 1-2 абзаца."""
-
-    response = _get_client().messages.create(
-        model=LLM_MODEL,
-        max_tokens=512,
-        messages=[{"role": "user", "content": prompt}],
+    user_text = (
+        f"Напиши короткий привлекательный пост-подпись для фото.\n"
+        f"Описание фото: {photo_description}\n\n"
+        f"Только пост, 1-2 абзаца, без объяснений."
     )
-
-    return response.content[0].text.strip()
+    return _call_llm(_build_system_blocks(), user_text, max_tokens=512)

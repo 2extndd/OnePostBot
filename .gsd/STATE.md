@@ -7,6 +7,7 @@
 
 ## Milestone Registry
 - 🔄 **M001:** Fix bot deployment
+- ⬜ **M002:** Configurable AI prompts and ad integration
 
 ## Recent Decisions
 - None recorded

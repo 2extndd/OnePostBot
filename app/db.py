@@ -42,6 +42,12 @@ CREATE TABLE IF NOT EXISTS channels (
     username TEXT PRIMARY KEY,
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -159,3 +165,57 @@ def remove_channel(username: str):
     with _connect() as conn:
         conn.execute("DELETE FROM channels WHERE username = ?", (username,))
     logger.info(f"➖ Канал @{username} удалён")
+
+
+# ---------- Settings (key-value) ----------
+
+DEFAULT_SETTINGS = {
+    "project_context": (
+        "Это новостной Telegram-канал проекта OneProvider.dev — платформы продажи "
+        "API-ключей к LLM (Claude, GPT и др.) для разработчиков. Стилистика: "
+        "технологичная, дружелюбная, понятная разработчикам. Аудитория: "
+        "индивидуальные разработчики, использующие LLM в работе (Claude Code, Cursor, "
+        "кастомные интеграции). Тон: спокойная уверенность, без хайпа."
+    ),
+    "rewrite_prompt": (
+        "Перепиши эту новость на английском языке для нашего канала. Сохрани факты, "
+        "но адаптируй под нашу аудиторию разработчиков. Сделай текст живым и "
+        "читабельным. Только результат, без объяснений."
+    ),
+    "ad_prompt": (
+        "К этому тексту добавь органичную рекламную интеграцию проекта OneProvider.dev "
+        "(платформа доступа к Claude/GPT API). НЕ переписывай основной текст — только "
+        "добавь в конце 1-2 предложения с естественным упоминанием и ссылкой "
+        "https://oneprovider.dev. Верни полный текст с интеграцией."
+    ),
+}
+
+
+def get_setting(key: str) -> str:
+    """Получить настройку. Возвращает сохранённое значение или дефолт."""
+    with _connect() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    if row:
+        return row["value"]
+    return DEFAULT_SETTINGS.get(key, "")
+
+
+def set_setting(key: str, value: str):
+    """Сохранить настройку."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+    logger.info(f"⚙️ Настройка '{key}' обновлена ({len(value)} символов)")
+
+
+def get_all_settings() -> Dict[str, str]:
+    """Все настройки (с дефолтами)."""
+    result = dict(DEFAULT_SETTINGS)
+    with _connect() as conn:
+        rows = conn.execute("SELECT key, value FROM settings").fetchall()
+    for r in rows:
+        result[r["key"]] = r["value"]
+    return result
