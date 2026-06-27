@@ -13,10 +13,19 @@ from .config import OPENAI_BASE_URL, OPENAI_API_KEY, IMAGE_MODEL, DATA_DIR
 
 logger = logging.getLogger(__name__)
 
-client = OpenAI(
-    base_url=OPENAI_BASE_URL,
-    api_key=OPENAI_API_KEY,
-)
+_client = None
+
+def _get_client():
+    """Ленивая инициализация OpenAI клиента."""
+    global _client
+    if _client is None:
+        if not OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY не задан — нельзя использовать image_regen")
+        _client = OpenAI(
+            base_url=OPENAI_BASE_URL,
+            api_key=OPENAI_API_KEY,
+        )
+    return _client
 
 GENERATED_DIR = DATA_DIR / "generated"
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
@@ -46,7 +55,7 @@ def regenerate_photo(image_path: str, prompt: str) -> str:
         raise FileNotFoundError(f"Файл изображения не найден: {image_path}")
 
     with open(image_path, "rb") as f:
-        response = client.images.edit(
+        response = _get_client().images.edit(
             model=IMAGE_MODEL,
             image=f,
             prompt=prompt,
@@ -72,7 +81,7 @@ def generate_image(prompt: str, filename: str = "generated") -> str:
     Генерируем новое изображение с нуля по промпту.
     Возвращаем путь к файлу.
     """
-    response = client.images.generate(
+    response = _get_client().images.generate(
         model=IMAGE_MODEL,
         prompt=prompt,
         n=1,

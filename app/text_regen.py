@@ -9,10 +9,19 @@ from .config import ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY, LLM_MODEL
 
 logger = logging.getLogger(__name__)
 
-client = Anthropic(
-    base_url=ANTHROPIC_BASE_URL,
-    api_key=ANTHROPIC_API_KEY,
-)
+_client = None
+
+def _get_client():
+    """Ленивая инициализация Anthropic клиента."""
+    global _client
+    if _client is None:
+        if not ANTHROPIC_API_KEY:
+            raise ValueError("ANTHROPIC_API_KEY не задан — нельзя использовать text_regen")
+        _client = Anthropic(
+            base_url=ANTHROPIC_BASE_URL,
+            api_key=ANTHROPIC_API_KEY,
+        )
+    return _client
 
 
 def regenerate_text(original_text: str, context: str = "") -> str:
@@ -34,7 +43,7 @@ def regenerate_text(original_text: str, context: str = "") -> str:
 
 Только результат, без объяснений:"""
 
-    response = client.messages.create(
+    response = _get_client().messages.create(
         model=LLM_MODEL,
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
@@ -54,7 +63,7 @@ def generate_caption_for_photo(photo_description: str, channel_context: str) -> 
 
 Только пост, без объяснений. 1-2 абзаца."""
 
-    response = client.messages.create(
+    response = _get_client().messages.create(
         model=LLM_MODEL,
         max_tokens=512,
         messages=[{"role": "user", "content": prompt}],
