@@ -12,10 +12,6 @@ import os
 from datetime import datetime, timedelta
 
 from telethon import TelegramClient
-from telethon.tl.functions.messages import SendMessageRequest
-from telethon.tl.functions.photos import UploadPhotoRequest
-from telethon.tl.functions.messages import UploadMediaRequest
-from telethon.tl.types import InputPeerChannel, InputMediaUploadedPhoto
 
 from .config import (
     BOT_TOKEN,
@@ -61,13 +57,7 @@ async def post_via_telethon(text: str, photo_path: str = None):
     entity = await client.get_entity(TARGET_CHANNEL)
 
     if photo_path:
-        # Загружаем фото
-        with open(photo_path, "rb") as f:
-            photo = await client.upload_file(f)
-        media = InputMediaUploadedPhoto(photo, caption=text)
-        await client(functions.messages.UploadMediaRequest(peer=entity, media=media))
-        # Отправляем с фото
-        await client.send_message(entity, text, file=photo)
+        await client.send_message(entity, text, file=photo_path)
     else:
         await client.send_message(entity, text)
 
