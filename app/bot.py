@@ -243,14 +243,14 @@ async def do_parse(message: Message, state: FSMContext, count: int = 10, channel
             await send_error(message.chat.id, "Нет каналов для парсинга. Добавьте через меню «Управление каналами».")
             return
 
-        posts = await parser.fetch_with_photos(channels=channels, limit=max(count, 10))
+        posts = await parser.fetch_with_photos(channels=channels, limit=count)
 
         if not posts:
-            await send_error(message.chat.id, "Нет постов в канале.")
+            await send_error(message.chat.id, "Нет постов в каналах.")
             return
 
-        posts = posts[:count]
         await state.update_data(posts=posts, channel=channel)
+        await send_with_topic(message.chat.id, f"📥 Найдено {len(posts)} постов из {len(channels)} каналов.")
         await show_post(parser, posts, message, state, index=0)
 
     except Exception as e:
