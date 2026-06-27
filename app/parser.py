@@ -100,7 +100,7 @@ class TGParser:
                         "msg_id": msg.id,
                         "text": msg.text or "",
                         "photo_path": photo_path,
-                        "date": msg_date.isoformat() if msg_date else "",
+                        "date": msg.date.isoformat() if msg.date else "",
                     })
 
                     if skip_processed:
