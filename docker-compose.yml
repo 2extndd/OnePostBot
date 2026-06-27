@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  tg-publisher:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+networks:
+  internal:
+    driver: bridge

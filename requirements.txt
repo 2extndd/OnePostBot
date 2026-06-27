@@ -1,0 +1,8 @@
+aiogram>=3.0
+telethon>=1.44
+anthropic>=0.40
+openai>=1.60
+aiosqlite
+pyyaml
+python-dotenv
+aiohttp
