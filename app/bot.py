@@ -350,20 +350,9 @@ async def cmd_delchannel(message: Message):
 
 # ---------- post display ----------
 
-async def show_post(parser: TGParser, posts: List[Dict], message: Message, state: FSMContext, index: int = 0):
-    """Показать один пост с кнопками."""
-    if index >= len(posts):
-        await send_with_topic(message.chat.id, "✅ Все посты просмотрены.")
-        return
-
-    if index < 0:
-        index = 0
-
-    post = posts[index]
-    full_text = post["text"]
-    channel_name = post.get("channel", post.get("channel_username", "unknown"))
-
-    kb = InlineKeyboardMarkup(
+def _post_kb(index: int) -> InlineKeyboardMarkup:
+    """Клавиатура действий под постом."""
+    return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="📝 Рерайт", callback_data=f"rewrite_{index}"),
@@ -382,6 +371,37 @@ async def show_post(parser: TGParser, posts: List[Dict], message: Message, state
             ],
         ],
     )
+
+
+async def _update_post_message(callback, index: int, new_text: str):
+    """Редактирует сообщение с постом на месте (caption для фото, text для текста)."""
+    kb = _post_kb(index)
+    msg = callback.message
+    try:
+        if msg.photo or msg.caption is not None:
+            await msg.edit_caption(caption=_cap(new_text), parse_mode="HTML", reply_markup=kb)
+        else:
+            await msg.edit_text(_cap(new_text, 4096), parse_mode="HTML", reply_markup=kb)
+    except Exception as e:
+        # Не удалось отредактировать (например, альбом — кнопки в отдельном сообщении) — шлём новое
+        logger.warning(f"edit failed, sending new: {e}")
+        await send_with_topic(msg.chat.id, _cap(new_text, 4096), reply_markup=kb, parse_mode="HTML")
+
+
+async def show_post(parser: TGParser, posts: List[Dict], message: Message, state: FSMContext, index: int = 0):
+    """Показать один пост с кнопками."""
+    if index >= len(posts):
+        await send_with_topic(message.chat.id, "✅ Все посты просмотрены.")
+        return
+
+    if index < 0:
+        index = 0
+
+    post = posts[index]
+    full_text = post["text"]
+    channel_name = post.get("channel", post.get("channel_username", "unknown"))
+
+    kb = _post_kb(index)
 
     photo_paths = post.get("photo_paths") or ([post["photo_path"]] if post.get("photo_path") else [])
 
@@ -436,15 +456,10 @@ async def handle_rewrite(callback: types.CallbackQuery, state: FSMContext):
     try:
         post = posts[index]
         new_text = rewrite_news(post["text"])
-        # Сохраняем переписанный текст в пост, чтобы реклама/публикация работали с ним
         posts[index]["edited_text"] = new_text
         posts[index]["showing_original"] = False
         await state.update_data(posts=posts)
-        caption = f"✅ Рерайт:\n\n{new_text}"
-        if post.get("photo_path"):
-            await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=_cap(caption), parse_mode="HTML")
-        else:
-            await send_with_topic(callback.message.chat.id, caption, parse_mode="HTML")
+        await _update_post_message(callback, index, new_text)
     except Exception as e:
         logger.error(f"Rewrite error: {e}")
         await send_error(callback.message.chat.id, f"{e}")
@@ -509,11 +524,7 @@ async def handle_translate(callback: types.CallbackQuery, state: FSMContext):
         posts[index]["edited_text"] = translated
         posts[index]["showing_original"] = False
         await state.update_data(posts=posts)
-        caption = f"✅ Перевод (EN):\n\n{translated}"
-        if post.get("photo_path"):
-            await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=_cap(caption), parse_mode="HTML")
-        else:
-            await send_with_topic(callback.message.chat.id, caption, parse_mode="HTML")
+        await _update_post_message(callback, index, translated)
     except Exception as e:
         logger.error(f"Translate error: {e}")
         await send_error(callback.message.chat.id, f"{e}")
@@ -538,11 +549,7 @@ async def handle_ad(callback: types.CallbackQuery, state: FSMContext):
         posts[index]["edited_text"] = new_text
         posts[index]["showing_original"] = False
         await state.update_data(posts=posts)
-        caption = f"✅ С рекламной интеграцией:\n\n{new_text}"
-        if post.get("photo_path"):
-            await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=_cap(caption), parse_mode="HTML")
-        else:
-            await send_with_topic(callback.message.chat.id, caption, parse_mode="HTML")
+        await _update_post_message(callback, index, new_text)
     except Exception as e:
         logger.error(f"Ad error: {e}")
         await send_error(callback.message.chat.id, f"{e}")
@@ -576,12 +583,7 @@ async def handle_original(callback: types.CallbackQuery, state: FSMContext):
             await callback.answer("📄 Оригинал")
         await state.update_data(posts=posts)
 
-    label = "📄 ОРИГИНАЛ:" if post.get("showing_original") else "✏️ ТЕКУЩАЯ ВЕРСИЯ:"
-    caption = f"{label}\n\n{text}"
-    if post.get("photo_path"):
-        await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=_cap(caption), parse_mode="HTML")
-    else:
-        await send_with_topic(callback.message.chat.id, caption, parse_mode="HTML")
+    await _update_post_message(callback, index, text)
 
 
 @dp.callback_query(lambda c: c.data.startswith("regen_photo_"))
