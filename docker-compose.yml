@@ -4,8 +4,23 @@ services:
   tg-publisher:
     build: .
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      BOT_TOKEN: "8732968162:AAHedj6mb2jUMlogz5HLtKpN2aDqCEZdDEM"
+      TELEGRAM_API_ID: "36012732"
+      TELEGRAM_API_HASH: "f71d40d01f98db40be8e8faa743fda13"
+      TELEPHONE: "+4915143382445"
+      TOPIC_ID: "425"
+      CHAT_ID: "-1003906263366"
+      CHAT_ID_2: "-1003965270090"
+      TOPIC_ID_2: "2084"
+      ANTHROPIC_API_KEY: "placeholder_anthropic_key"
+      OPENAI_API_KEY: "placeholder_openai_key"
+      PARSE_CHANNELS: ""
+      PARSE_DAYS: "1"
+      POLL_INTERVAL: "300"
+      POST_DELAY_MIN: "10"
+      POST_DELAY_MAX: "30"
+      DATA_DIR: "/app/data"
     volumes:
       - ./data:/app/data
     networks:
