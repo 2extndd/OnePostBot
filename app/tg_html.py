@@ -64,6 +64,67 @@ def _strip_unsupported(text: str) -> str:
     return re.sub(r"<(/?[a-zA-Z][^>]*)>", repl, text)
 
 
+def _normalize_tags(text: str) -> str:
+    """Нормализуем синонимы в канонические + убираем атрибуты (кроме href)."""
+    text = re.sub(r"<(/?)strong>", r"<\1b>", text, flags=re.IGNORECASE)
+    text = re.sub(r"<(/?)em>", r"<\1i>", text, flags=re.IGNORECASE)
+    text = re.sub(r"<(/?)ins>", r"<\1u>", text, flags=re.IGNORECASE)
+    text = re.sub(r"<(/?)(strike|del)>", r"<\1s>", text, flags=re.IGNORECASE)
+    return text
+
+
+_SIMPLE_TAGS = {"b", "i", "u", "s", "code", "pre", "blockquote"}
+
+
+def _balance_tags(text: str) -> str:
+    """
+    Закрывает незакрытые теги и убирает закрывающие без открытия.
+    Работает для простых тегов и <a>. Гарантирует валидность для Telegram.
+    """
+    stack = []
+    out = []
+    pos = 0
+    for m in re.finditer(r"<(/?)([a-zA-Z]+)([^>]*)>", text):
+        out.append(text[pos:m.start()])
+        pos = m.end()
+        closing = m.group(1) == "/"
+        name = m.group(2).lower()
+        attrs = m.group(3)
+        tag_ok = name in _SIMPLE_TAGS or name == "a"
+        if not tag_ok:
+            continue  # пропускаем неизвестный тег целиком (текст уже сохранён)
+        if not closing:
+            out.append(f"<{name}{attrs}>")
+            stack.append(name)
+        else:
+            if name in stack:
+                # закрываем всё вложенное до этого тега
+                while stack:
+                    top = stack.pop()
+                    out.append(f"</{top}>")
+                    if top == name:
+                        break
+            # закрывающий без открытия — игнор
+    out.append(text[pos:])
+    # дозакрываем оставшиеся открытые
+    while stack:
+        out.append(f"</{stack.pop()}>")
+    return "".join(out)
+
+
+def safe_truncate(text: str, limit: int) -> str:
+    """Обрезает текст до limit символов и закрывает оборванные теги."""
+    if not text or len(text) <= limit:
+        return text
+    cut = text[:limit]
+    # не рвём тег посередине: если последний '<' не закрыт, отрезаем до него
+    last_open = cut.rfind("<")
+    last_close = cut.rfind(">")
+    if last_open > last_close:
+        cut = cut[:last_open]
+    return _balance_tags(cut)
+
+
 def to_telegram_html(text: str) -> str:
     """
     Главная функция: приводит произвольный вывод LLM к валидному Telegram-HTML.
@@ -72,7 +133,9 @@ def to_telegram_html(text: str) -> str:
         return text
     text = _md_to_html(text)
     text = _block_tags_to_newlines(text)
+    text = _normalize_tags(text)
     text = _strip_unsupported(text)
+    text = _balance_tags(text)
     # Чистим лишние пустые строки (3+ подряд → 2)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()

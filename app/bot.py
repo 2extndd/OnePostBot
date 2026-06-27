@@ -27,6 +27,12 @@ def _photo(path: str):
     if path and (path.startswith("http://") or path.startswith("https://")):
         return path
     return FSInputFile(path)
+
+
+def _cap(text: str, limit: int = 1024) -> str:
+    """Безопасная обрезка caption с закрытием HTML-тегов."""
+    from .tg_html import safe_truncate
+    return safe_truncate(text, limit)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -386,7 +392,7 @@ async def show_post(parser: TGParser, posts: List[Dict], message: Message, state
         # Альбом: отправляем media_group (без кнопок — Telegram не разрешает), затем кнопки отдельно
         from aiogram.types import InputMediaPhoto
         media = []
-        caption = full_text[:1024] if full_text else channel_name
+        caption = _cap(full_text) if full_text else channel_name
         for i, p in enumerate(photo_paths[:10]):
             if i == 0:
                 media.append(InputMediaPhoto(media=_photo(p), caption=caption, parse_mode="HTML"))
@@ -405,13 +411,13 @@ async def show_post(parser: TGParser, posts: List[Dict], message: Message, state
             reply_markup=kb, message_thread_id=_current_thread.get(),
         )
     elif photo_paths:
-        caption = full_text[:1024] if full_text else channel_name
+        caption = _cap(full_text) if full_text else channel_name
         await message.answer_photo(
             photo=_photo(photo_paths[0]), caption=caption,
             reply_markup=kb, parse_mode="HTML",
         )
     else:
-        text = full_text[:4096] if full_text else channel_name
+        text = _cap(full_text, 4096) if full_text else channel_name
         await bot.send_message(
             chat_id=message.chat.id, text=text, reply_markup=kb,
             parse_mode="HTML", message_thread_id=_current_thread.get(),
@@ -468,7 +474,7 @@ async def handle_rewrite(callback: types.CallbackQuery, state: FSMContext):
         await state.update_data(posts=posts)
         caption = f"✅ Рерайт:\n\n{new_text}"
         if post.get("photo_path"):
-            await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=caption[:1024], parse_mode="HTML")
+            await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=_cap(caption), parse_mode="HTML")
         else:
             await send_with_topic(callback.message.chat.id, caption, parse_mode="HTML")
     except Exception as e:
@@ -507,7 +513,7 @@ async def handle_rewrite_input(message: Message, state: FSMContext):
         await state.update_data(posts=posts)
         caption = f"✅ Рерайт (по запросу):\n\n{new_text}"
         if post.get("photo_path"):
-            await message.answer_photo(photo=_photo(post["photo_path"]), caption=caption[:1024], parse_mode="HTML")
+            await message.answer_photo(photo=_photo(post["photo_path"]), caption=_cap(caption), parse_mode="HTML")
         else:
             await send_with_topic(message.chat.id, caption, parse_mode="HTML")
     except Exception as e:
@@ -537,7 +543,7 @@ async def handle_translate(callback: types.CallbackQuery, state: FSMContext):
         await state.update_data(posts=posts)
         caption = f"✅ Перевод (EN):\n\n{translated}"
         if post.get("photo_path"):
-            await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=caption[:1024], parse_mode="HTML")
+            await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=_cap(caption), parse_mode="HTML")
         else:
             await send_with_topic(callback.message.chat.id, caption, parse_mode="HTML")
     except Exception as e:
@@ -566,7 +572,7 @@ async def handle_ad(callback: types.CallbackQuery, state: FSMContext):
         await state.update_data(posts=posts)
         caption = f"✅ С рекламной интеграцией:\n\n{new_text}"
         if post.get("photo_path"):
-            await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=caption[:1024], parse_mode="HTML")
+            await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=_cap(caption), parse_mode="HTML")
         else:
             await send_with_topic(callback.message.chat.id, caption, parse_mode="HTML")
     except Exception as e:
@@ -605,7 +611,7 @@ async def handle_original(callback: types.CallbackQuery, state: FSMContext):
     label = "📄 ОРИГИНАЛ:" if post.get("showing_original") else "✏️ ТЕКУЩАЯ ВЕРСИЯ:"
     caption = f"{label}\n\n{text}"
     if post.get("photo_path"):
-        await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=caption[:1024], parse_mode="HTML")
+        await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=_cap(caption), parse_mode="HTML")
     else:
         await send_with_topic(callback.message.chat.id, caption, parse_mode="HTML")
 
@@ -629,7 +635,7 @@ async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMConte
         image_prompt = db.get_setting("image_prompt")
         new_photo = regenerate_photo(post["photo_path"], image_prompt)
         caption = f"✅ Фото переработано!\n\n{post['text'][:200]}"
-        await callback.message.answer_photo(photo=_photo(new_photo), caption=caption[:1024], parse_mode="HTML")
+        await callback.message.answer_photo(photo=_photo(new_photo), caption=_cap(caption), parse_mode="HTML")
     except Exception as e:
         logger.error(f"Regen photo error: {e}")
         await callback.answer(f"❌ Ошибка: {e}")
