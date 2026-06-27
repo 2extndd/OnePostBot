@@ -370,6 +370,9 @@ async def show_post(parser: TGParser, posts: List[Dict], message: Message, state
             ],
             [
                 InlineKeyboardButton(text="🖼 Фото", callback_data=f"regen_photo_{index}"),
+                InlineKeyboardButton(text="📄 Оригинал", callback_data=f"orig_{index}"),
+            ],
+            [
                 InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"publish_{index}"),
             ],
         ],
@@ -563,6 +566,42 @@ async def handle_ad(callback: types.CallbackQuery, state: FSMContext):
         await send_error(callback.message.chat.id, f"{e}")
 
 
+@dp.callback_query(lambda c: c.data.startswith("orig_"))
+async def handle_original(callback: types.CallbackQuery, state: FSMContext):
+    """Свитч между оригиналом и последней отредактированной версией."""
+    index = int(callback.data.split("_")[-1])
+    state_data = await state.get_data()
+    posts = state_data.get("posts", [])
+    if index >= len(posts):
+        await callback.answer("❌ Пост не найден")
+        return
+
+    post = posts[index]
+    edited = post.get("edited_text")
+    if not edited:
+        await callback.answer("Пост ещё не редактировался — это и есть оригинал")
+        text = post["text"]
+    else:
+        # свитч: показываем оригинал, при повторном нажатии — снова отредактированный
+        showing = post.get("showing_original", False)
+        if showing:
+            post["showing_original"] = False
+            text = edited
+            await callback.answer("↩️ Отредактированная версия")
+        else:
+            post["showing_original"] = True
+            text = post["text"]
+            await callback.answer("📄 Оригинал")
+        await state.update_data(posts=posts)
+
+    label = "📄 ОРИГИНАЛ:" if post.get("showing_original") else "✏️ ТЕКУЩАЯ ВЕРСИЯ:"
+    caption = f"{label}\n\n{text}"
+    if post.get("photo_path"):
+        await callback.message.answer_photo(photo=_photo(post["photo_path"]), caption=caption[:1024], parse_mode="HTML")
+    else:
+        await send_with_topic(callback.message.chat.id, caption)
+
+
 @dp.callback_query(lambda c: c.data.startswith("regen_photo_"))
 async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMContext):
     index = int(callback.data.split("_")[-1])
@@ -601,8 +640,11 @@ async def handle_publish(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer("✅ Добавлено в очередь!")
     post = posts[index]
 
-    # Используем отредактированный текст (рерайт/перевод/реклама), иначе оригинал
-    final_text = post.get("edited_text") or post["text"]
+    # Что показано сейчас, то и публикуем: оригинал (если свитч) или отредактированное
+    if post.get("showing_original"):
+        final_text = post["text"]
+    else:
+        final_text = post.get("edited_text") or post["text"]
 
     post_id = enqueue_post(final_text, post.get("photo_path"), post.get("channel", ""), post["msg_id"])
 

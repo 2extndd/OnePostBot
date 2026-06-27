@@ -1,7 +1,7 @@
 # Codebase Map
 
-Generated: 2026-06-27T20:54:46Z | Files: 21 | Described: 0/21
-<!-- gsd:codebase-meta {"generatedAt":"2026-06-27T20:54:46Z","fingerprint":"b1b3207c91116e6ac727d398c20ad7fba01a5983","fileCount":21,"truncated":false} -->
+Generated: 2026-06-27T21:01:59Z | Files: 23 | Described: 0/23
+<!-- gsd:codebase-meta {"generatedAt":"2026-06-27T21:01:59Z","fingerprint":"e089588b3da6081d63a559258ac732a236f231ef","fileCount":23,"truncated":false} -->
 
 ### (root)/
 - `_auth.py`
@@ -23,7 +23,9 @@ Generated: 2026-06-27T20:54:46Z | Files: 21 | Described: 0/21
 - `app/main.py`
 - `app/notifier.py`
 - `app/parser.py`
+- `app/prompts.py`
 - `app/publisher.py`
 - `app/scheduler.py`
 - `app/sql.py`
 - `app/text_regen.py`
+- `app/tg_html.py`
