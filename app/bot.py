@@ -142,6 +142,7 @@ async def send_with_topic(chat_id: int, text: str, reply_markup=None, thread_id=
             kwargs["message_thread_id"] = tid
         if reply_markup:
             kwargs["reply_markup"] = reply_markup
+        logger.info(f"➡️ send chat={chat_id} thread={tid} has_kb={reply_markup is not None}")
         await bot.send_message(**kwargs)
 
     target_thread = _current_thread.get() if thread_id is _UNSET else thread_id
