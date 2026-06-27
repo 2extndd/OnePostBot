@@ -259,7 +259,9 @@ async def do_parse(message: Message, state: FSMContext, count: int = 10, channel
 
         await state.update_data(posts=posts, channel=channel)
         await send_with_topic(message.chat.id, f"📥 Найдено {len(posts)} постов из {len(channels)} каналов.")
-        await show_post(parser, posts, message, state, index=0)
+        # Отправляем ВСЕ посты сразу, каждый со своими кнопками (без листалки)
+        for i in range(len(posts)):
+            await show_post(parser, posts, message, state, index=i)
 
     except Exception as e:
         logger.error(f"Parse error: {e}\n{traceback.format_exc()}")
@@ -364,11 +366,6 @@ async def show_post(parser: TGParser, posts: List[Dict], message: Message, state
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="⬅️ Назад", callback_data=f"prev_{index}"),
-                InlineKeyboardButton(text=f"{index+1}/{len(posts)}", callback_data="noop"),
-                InlineKeyboardButton(text="➡️ Далее", callback_data=f"next_{index}"),
-            ],
-            [
                 InlineKeyboardButton(text="📝 Рерайт", callback_data=f"rewrite_{index}"),
                 InlineKeyboardButton(text="✍️ Рерайт промт", callback_data=f"rewrite_custom_{index}"),
             ],
@@ -407,7 +404,7 @@ async def show_post(parser: TGParser, posts: List[Dict], message: Message, state
             logger.error(f"send_media_group error: {e}")
         # Кнопки отдельным сообщением
         await bot.send_message(
-            chat_id=message.chat.id, text=f"⬆️ Пост {index+1}/{len(posts)} — действия:",
+            chat_id=message.chat.id, text="⬆️ Действия с постом:",
             reply_markup=kb, message_thread_id=_current_thread.get(),
         )
     elif photo_paths:
@@ -425,35 +422,6 @@ async def show_post(parser: TGParser, posts: List[Dict], message: Message, state
 
 
 # ---------- callbacks ----------
-
-@dp.callback_query(lambda c: c.data in ("noop",))
-async def handle_noop(callback: types.CallbackQuery):
-    await callback.answer()
-
-
-@dp.callback_query(lambda c: c.data.startswith(("prev_", "next_")))
-async def handle_nav(callback: types.CallbackQuery, state: FSMContext):
-    action, idx_str = callback.data.split("_", 1)
-    try:
-        index = int(idx_str)
-    except ValueError:
-        await callback.answer("❌ Ошибка")
-        return
-
-    state_data = await state.get_data()
-    posts = state_data.get("posts", [])
-    if not posts:
-        await callback.answer("❌ Нет постов")
-        return
-
-    if action == "prev":
-        index = max(0, index - 1)
-    elif action == "next":
-        index = min(len(posts) - 1, index + 1)
-
-    await show_post(None, posts, callback.message, state, index)
-    await callback.answer()
-
 
 @dp.callback_query(lambda c: c.data.startswith("rewrite_") and not c.data.startswith("rewrite_custom_"))
 async def handle_rewrite(callback: types.CallbackQuery, state: FSMContext):
