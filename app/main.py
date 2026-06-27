@@ -25,33 +25,45 @@ async def main():
 
     cmd = sys.argv[1]
 
+    from . import db
+    db.init_db()
+
     if cmd == "bot":
         await bot_main()
     elif cmd == "parse":
         from .parser import TGParser
-        from .config import TELEPHONE, PARSE_CHANNELS
+        from .config import TELEPHONE
         parser = TGParser(phone=TELEPHONE)
         await parser.start()
-        posts = await parser.fetch_with_photos()
-        print(f"📊 Найдено {len(posts)} постов")
-        for i, post in enumerate(posts[:5]):
-            print(f"  {i+1}. [{post['channel']}] {post['text'][:80]}...")
-        await parser.close()
+        try:
+            posts = await parser.fetch_with_photos()
+            print(f"📊 Найдено {len(posts)} постов")
+            for i, post in enumerate(posts[:5]):
+                print(f"  {i+1}. [{post['channel']}] {post['text'][:80]}...")
+        finally:
+            await parser.close()
     elif cmd == "publish":
-        from .scheduler import get_pending_posts
+        from .scheduler import get_pending_posts, mark_published, mark_failed
         from .publisher import publish_post
         pending = get_pending_posts()
         print(f"📤 Публикую {len(pending)} постов...")
         for post in pending:
-            await publish_post(post["text"], post.get("photo_path"))
+            try:
+                await publish_post(post["text"], post.get("photo_path"))
+                mark_published(post["id"])
+            except Exception as e:
+                mark_failed(post["id"], str(e))
+                print(f"❌ Ошибка поста #{post['id']}: {e}")
     elif cmd == "run":
         from .parser import TGParser
         from .config import TELEPHONE
         parser = TGParser(phone=TELEPHONE)
         await parser.start()
-        posts = await parser.fetch_with_photos()
-        print(f"📊 Найдено {len(posts)} постов")
-        await parser.close()
+        try:
+            posts = await parser.fetch_with_photos()
+            print(f"📊 Найдено {len(posts)} постов")
+        finally:
+            await parser.close()
     else:
         print(f"❌ Неизвестная команда: {cmd}")
 

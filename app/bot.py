@@ -7,13 +7,17 @@ import logging
 import asyncio
 import random
 import traceback
-from aiogram import Bot, Dispatcher, types
+from typing import Dict, List
+
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     ReplyKeyboardMarkup,
     KeyboardButton,
+    Message,
+    CallbackQuery,
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -30,7 +34,8 @@ from .parser import TGParser
 from .text_regen import regenerate_text, generate_caption_for_photo
 from .image_regen import regenerate_photo
 from .publisher import post_via_bot
-from .scheduler import enqueue_post, get_pending_posts, mark_processed
+from .scheduler import enqueue_post, get_pending_posts, approve_post, mark_published, mark_failed, get_post, update_post
+from . import db
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -40,15 +45,17 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
 # Глобальное состояние
-active_watches = {}  # chat_id -> True
+active_watches: Dict[str, bool] = {}
 
 
 class RewriteState(StatesGroup):
     waiting_prompt = State()
 
 
-async def send_with_topic(chat_id: str, text: str, reply_markup=None):
-    """Отправить сообщение в топик."""
+# ---------- helpers ----------
+
+async def send_with_topic(chat_id: int, text: str, reply_markup=None):
+    """Отправить сообщение в тему."""
     try:
         kwargs = {"chat_id": chat_id, "text": text}
         if TOPIC_ID:
@@ -61,14 +68,21 @@ async def send_with_topic(chat_id: str, text: str, reply_markup=None):
         await bot.send_message(chat_id=chat_id, text=f"❌ Ошибка доступа: проверьте права бота в канале")
 
 
+async def send_error(chat_id: int, text: str):
+    """Отправить ошибку и ответить на коллбек, если есть."""
+    await send_with_topic(chat_id, f"❌ {text}")
+
+
+# ---------- commands ----------
+
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message, state: FSMContext):
+async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     kb = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton("/parse 10"), KeyboardButton("/parse 20")],
-            [KeyboardButton("/publish"), KeyboardButton("/watch")],
-            [KeyboardButton("/help")],
+            [KeyboardButton(text="/parse 10"), KeyboardButton(text="/parse 20")],
+            [KeyboardButton(text="/publish"), KeyboardButton(text="/watch")],
+            [KeyboardButton(text="/help")],
         ],
         resize_keyboard=True,
     )
@@ -77,9 +91,15 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "🤖 TG Publisher бот активен!\n\n"
         "📋 Команды:\n"
         "/parse N — показать последние N постов\n"
-        "/parse @channel N — парсить конкретный канал\n"
-        "/publish — опубликовать выбранный пост\n"
-        "/watch — включить мониторинг\n"
+        "/parse @channel N — парсить конкретный канал\n\n"
+        "При показе постов доступны кнопки:\n"
+        "• Рерайт — переписать текст (на английском)\n"
+        "• Рерайт промт — переписать с твоим промптом\n"
+        "• Перевести — перевести на английский\n"
+        "• Перегенерировать фото — улучшить изображение\n"
+        "• Опубликовать — добавить в очередь\n\n"
+        "/publish — опубликовать одобренные посты\n"
+        "/watch — включить мониторинг новых постов\n"
         "/stop — остановить мониторинг\n"
         "/help — справка",
         reply_markup=kb,
@@ -87,7 +107,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 
 @dp.message(Command("help"))
-async def cmd_help(message: types.Message):
+async def cmd_help(message: Message):
     await send_with_topic(
         message.chat.id,
         "📋 Команды бота:\n\n"
@@ -98,8 +118,8 @@ async def cmd_help(message: types.Message):
         "• Рерайт промт — переписать с твоим промптом\n"
         "• Перевести — перевести на английский\n"
         "• Перегенерировать фото — улучшить изображение\n"
-        "• Опубликовать — отправить в целевой канал\n\n"
-        "/publish — опубликовать выбранный пост\n"
+        "• Опубликовать — добавить в очередь\n\n"
+        "/publish — опубликовать одобренные посты\n"
         "/watch — включить мониторинг новых постов\n"
         "/stop — остановить мониторинг\n"
         "/config — текущие настройки",
@@ -107,7 +127,7 @@ async def cmd_help(message: types.Message):
 
 
 @dp.message(Command("parse"))
-async def cmd_parse(message: types.Message, state: FSMContext):
+async def cmd_parse(message: Message, state: FSMContext):
     await state.clear()
     args = message.text.split()
     count = 10
@@ -135,315 +155,28 @@ async def cmd_parse(message: types.Message, state: FSMContext):
     try:
         channels = [channel] if channel else PARSE_CHANNELS
         if not channels:
-            await send_with_topic(message.chat.id, "❌ Нет каналов для парсинга. Укажите канал или добавьте в config.")
+            await send_error(message.chat.id, "Нет каналов для парсинга. Укажите канал или добавьте в config.")
             return
 
         posts = await parser.fetch_with_photos(channels=channels, since_days=PARSE_DAYS)
 
         if not posts:
-            await send_with_topic(message.chat.id, "📭 Нет новых постов за последние дни.")
+            await send_error(message.chat.id, "Нет новых постов за последние дни.")
             return
 
-        # Показываем посты по одному
+        # Сохраняем посты в состояние
+        await state.update_data(posts=posts, channel=channel)
         await show_post(parser, posts, message, state, index=0)
 
     except Exception as e:
         logger.error(f"Parse error: {e}\n{traceback.format_exc()}")
-        await send_with_topic(message.chat.id, f"❌ Ошибка парсинга: {e}")
-    finally:
-        await parser.close()
-
-
-async def show_post(parser, posts, message, state, index=0):
-    """Показать один пост с кнопками."""
-    if index >= len(posts):
-        await send_with_topic(message.chat.id, "✅ Все посты просмотрены.")
-        return
-
-    post = posts[index]
-    text_preview = post["text"][:200] + ("..." if len(post["text"]) > 200 else "")
-    channel_name = post.get("channel", post.get("channel_username", "unknown"))
-
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton("⬅️ Назад", callback_data=f"post_prev_{index}"),
-                InlineKeyboardButton(f"{index+1}/{len(posts)}", callback_data="noop"),
-                InlineKeyboardButton("➡️ Далее", callback_data=f"post_next_{index}"),
-            ],
-            [InlineKeyboardButton("📝 Рерайт", callback_data=f"rewrite_{index}")],
-            [InlineKeyboardButton("✍️ Рерайт промт", callback_data=f"rewrite_custom_{index}")],
-            [InlineKeyboardButton("🌐 Перевести", callback_data=f"translate_{index}")],
-            [InlineKeyboardButton("🖼 Перегенерировать фото", callback_data=f"regen_photo_{index}")],
-            [InlineKeyboardButton("✅ Опубликовать", callback_data=f"publish_{index}")],
-        ],
-    )
-
-    caption = f"📰 [{channel_name}]\n\n{text_preview}\n\n🆔 ID: {post['msg_id']}\n📅 {post['date']}"
-    if post.get("photo_url"):
-        await message.answer_photo(photo=post["photo_url"], caption=caption, reply_markup=kb)
-    else:
-        await send_with_topic(message.chat.id, caption, reply_markup=kb)
-
-    # Сохраняем состояние
-    await state.update_data(posts=posts, channel_parser=parser)
-
-
-@dp.callback_query(lambda c: c.data.startswith(("post_prev_", "post_next_", "rewrite_", "rewrite_custom_", "translate_", "regen_photo_", "publish_")))
-async def handle_callback(callback: types.CallbackQuery, state: FSMContext):
-    data = callback.data
-    parts = data.rsplit("_", 1)
-    action = parts[0]
-    try:
-        index = int(parts[1])
-    except (ValueError, IndexError):
-        await callback.answer("❌ Ошибка")
-        return
-
-    state_data = await state.get_data()
-    posts = state_data.get("posts", [])
-    parser = state_data.get("channel_parser")
-
-    if not posts:
-        await callback.answer("❌ Нет постов")
-        return
-
-    if action == "post_prev":
-        await show_post(parser, posts, callback.message, state, index=index)
-    elif action == "post_next":
-        await show_post(parser, posts, callback.message, state, index=index)
-
-    await callback.answer()
-
-
-@dp.callback_query(lambda c: c.data.startswith("rewrite_"))
-async def handle_rewrite(callback: types.CallbackQuery, state: FSMContext):
-    index = int(callback.data.split("_")[-1])
-    state_data = await state.get_data()
-    posts = state_data.get("posts", [])
-    if index >= len(posts):
-        await callback.answer("❌ Пост не найден")
-        return
-
-    post = posts[index]
-    text = post["text"]
-
-    # Рерайт на английском
-    new_text = regenerate_text(text, f"Переведи и перепиши на английский")
-    caption = f"✅ Рерайт (EN):\n\n{new_text}"
-
-    if post.get("photo_url"):
-        await callback.message.answer_photo(photo=post["photo_url"], caption=caption)
-    else:
-        await send_with_topic(callback.message.chat.id, caption)
-
-    # Предлагаем опубликовать
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton("✅ Опубликовать", callback_data=f"publish_{index}"),
-        InlineKeyboardButton("📋 К списку", callback_data=f"post_next_{index}"),
-    ]])
-    await send_with_topic(callback.message.chat.id, "Хочешь опубликовать этот вариант?", reply_markup=kb)
-    await callback.answer()
-
-
-@dp.callback_query(lambda c: c.data.startswith("rewrite_custom_"))
-async def handle_rewrite_custom(callback: types.CallbackQuery, state: FSMContext):
-    index = int(callback.data.split("_")[-1])
-    await state.set_state(RewriteState.waiting_prompt)
-    await state.update_data(rewrite_index=index)
-    await send_with_topic(callback.message.chat.id, "✍️ Введи свой промпт для рерайта:")
-    await callback.answer()
-
-
-@dp.message(RewriteState.waiting_prompt)
-async def handle_rewrite_input(message: types.Message, state: FSMContext):
-    prompt = message.text
-    data = await state.get_data()
-    index = data.get("rewrite_index")
-    state_data = await state.get_data()
-    posts = state_data.get("posts", [])
-
-    if index >= len(posts):
-        await state.clear()
-        await message.reply("❌ Пост не найден")
-        return
-
-    post = posts[index]
-    text = post["text"]
-    new_text = regenerate_text(text, prompt)
-    caption = f"✅ Рерайт:\n\n{prompt}\n\n{new_text}"
-
-    if post.get("photo_url"):
-        await message.answer_photo(photo=post["photo_url"], caption=caption)
-    else:
-        await send_with_topic(message.chat.id, caption)
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton("✅ Опубликовать", callback_data=f"publish_{index}"),
-        InlineKeyboardButton("📋 К списку", callback_data=f"post_next_{index}"),
-    ]])
-    await send_with_topic(message.chat.id, "Хочешь опубликовать?", reply_markup=kb)
-    await state.clear()
-
-
-@dp.callback_query(lambda c: c.data.startswith("translate_"))
-async def handle_translate(callback: types.CallbackQuery, state: FSMContext):
-    index = int(callback.data.split("_")[-1])
-    state_data = await state.get_data()
-    posts = state_data.get("posts", [])
-    if index >= len(posts):
-        await callback.answer("❌ Пост не найден")
-        return
-
-    post = posts[index]
-    text = post["text"]
-    translated = regenerate_text(text, "Переведи на английский язык. Сохрани смысл.")
-    caption = f"✅ Перевод (EN):\n\n{translated}"
-
-    if post.get("photo_url"):
-        await callback.message.answer_photo(photo=post["photo_url"], caption=caption)
-    else:
-        await send_with_topic(callback.message.chat.id, caption)
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton("✅ Опубликовать", callback_data=f"publish_{index}"),
-    ]])
-    await send_with_topic(callback.message.chat.id, "Опубликовать?", reply_markup=kb)
-    await callback.answer()
-
-
-@dp.callback_query(lambda c: c.data.startswith("regen_photo_"))
-async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMContext):
-    index = int(callback.data.split("_")[-1])
-    state_data = await state.get_data()
-    posts = state_data.get("posts", [])
-    if index >= len(posts):
-        await callback.answer("❌ Пост не найден")
-        return
-
-    post = posts[index]
-    if not post.get("photo_url"):
-        await callback.answer("❌ У поста нет фото")
-        return
-
-    await callback.answer("🖼 Перегенерирую...")
-
-    try:
-        new_photo = regenerate_photo(post["photo_url"], "Улучши качество, сделай ярче и контрастнее")
-        caption = f"✅ Фото переработано!\n\n{post['text'][:200]}"
-        await callback.message.answer_photo(photo=new_photo, caption=caption)
-    except Exception as e:
-        await callback.answer(f"❌ Ошибка: {e}")
-        logger.error(f"Regen photo error: {e}")
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton("✅ Опубликовать", callback_data=f"publish_{index}"),
-    ]])
-    await send_with_topic(callback.message.chat.id, "Опубликовать?", reply_markup=kb)
-
-
-@dp.callback_query(lambda c: c.data.startswith("publish_"))
-async def handle_publish(callback: types.CallbackQuery, state: FSMContext):
-    index = int(callback.data.split("_")[-1])
-    state_data = await state.get_data()
-    posts = state_data.get("posts", [])
-    if index >= len(posts):
-        await callback.answer("❌ Пост не найден")
-        return
-
-    post = posts[index]
-    await callback.answer("✅ Добавлено в очередь!")
-
-    # Регенерируем текст
-    new_text = regenerate_text(post["text"], "Переписываем пост для публикации")
-
-    enqueue_post(new_text, post.get("photo_url"), post.get("channel", ""), post["msg_id"])
-
-    # Публикуем
-    delay = random.randint(POST_DELAY_MIN, POST_DELAY_MAX)
-    await callback.message.answer(f"📤 Публикую через {delay} мин...")
-
-    try:
-        await post_via_bot(new_text, post.get("photo_url"))
-        await callback.message.answer("✅ Опубликовано!")
-        mark_processed("")  # Очистка очереди
-    except Exception as e:
-        logger.error(f"Publish error: {e}")
-        await callback.message.answer(f"❌ Ошибка публикации: {e}")
-
-    await callback.answer()
-
-
-@dp.message(Command("publish"))
-async def cmd_publish(message: types.Message):
-    pending = get_pending_posts()
-    if not pending:
-        await send_with_topic(message.chat.id, "📭 Очередь пуста.")
-        return
-
-    for i, post in enumerate(pending):
-        await send_with_topic(message.chat.id, f"📤 Публикую #{i+1}: {post['text'][:100]}...")
-        delay = random.randint(POST_DELAY_MIN, POST_DELAY_MAX)
-        await asyncio.sleep(delay * 60)
-        try:
-            await post_via_bot(post["text"], post.get("photo_path"))
-            mark_processed(post["_filepath"])
-            await send_with_topic(message.chat.id, "✅ Опубликовано!")
-        except Exception as e:
-            logger.error(f"Publish error: {e}")
-            await send_with_topic(message.chat.id, f"❌ Ошибка: {e}")
-
-
-@dp.message(Command("watch"))
-async def cmd_watch(message: types.Message):
-    chat_id = str(message.chat.id)
-    if chat_id in active_watches:
-        await send_with_topic(message.chat.id, "⏺ Мониторинг уже активен.")
-        return
-
-    active_watches[chat_id] = True
-    await send_with_topic(message.chat.id, "👁 Включаю мониторинг новых постов...")
-    asyncio.create_task(watch_loop(chat_id))
-
-
-@dp.message(Command("stop"))
-async def cmd_stop(message: types.Message):
-    chat_id = str(message.chat.id)
-    if chat_id in active_watches:
-        del active_watches[chat_id]
-        await send_with_topic(message.chat.id, "🛑 Мониторинг остановлен.")
-    else:
-        await send_with_topic(message.chat.id, "📭 Мониторинг не был активен.")
-
-
-async def watch_loop(chat_id: str):
-    """Постоянный мониторинг новых постов."""
-    parser = TGParser(phone=TELEPHONE)
-    await parser.start()
-    last_ids = set()
-
-    try:
-        while active_watches.get(chat_id):
-            try:
-                posts = await parser.fetch_with_photos(since_days=1)
-                new_posts = [p for p in posts if p["msg_id"] not in last_ids]
-
-                if new_posts:
-                    last_ids.update(p["msg_id"] for p in new_posts)
-                    await send_with_topic(chat_id, f"📬 Найдено {len(new_posts)} новых постов!")
-                    # Сохраняем для просмотра
-                    await state.update_data(posts=posts)
-                    await show_post(parser, new_posts, None, state, index=0)
-            except Exception as e:
-                logger.error(f"Watch error: {e}")
-
-            await asyncio.sleep(300)
+        await send_error(message.chat.id, f"{e}")
     finally:
         await parser.close()
 
 
 @dp.message(Command("config"))
-async def cmd_config(message: types.Message):
+async def cmd_config(message: Message):
     from .config import TELEGRAM_API_ID, PARSE_CHANNELS, TOPIC_ID, CHAT_ID
     await send_with_topic(
         message.chat.id,
@@ -457,9 +190,294 @@ async def cmd_config(message: types.Message):
     )
 
 
+# ---------- post display ----------
+
+async def show_post(parser: TGParser, posts: List[Dict], message: Message, state: FSMContext, index: int = 0):
+    """Показать один пост с кнопками."""
+    if index >= len(posts):
+        await send_with_topic(message.chat.id, "✅ Все посты просмотрены.")
+        return
+
+    if index < 0:
+        index = 0
+
+    post = posts[index]
+    text_preview = post["text"][:200] + ("..." if len(post["text"]) > 200 else "")
+    channel_name = post.get("channel", post.get("channel_username", "unknown"))
+    msg_id = post.get("msg_id", "?")
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="⬅️ Назад", callback_data=f"prev_{index}"),
+                InlineKeyboardButton(text=f"{index+1}/{len(posts)}", callback_data="noop"),
+                InlineKeyboardButton(text="➡️ Далее", callback_data=f"next_{index}"),
+            ],
+            [InlineKeyboardButton(text="📝 Рерайт", callback_data=f"rewrite_{index}")],
+            [InlineKeyboardButton(text="✍️ Рерайт промт", callback_data=f"rewrite_custom_{index}")],
+            [InlineKeyboardButton(text="🌐 Перевести", callback_data=f"translate_{index}")],
+            [InlineKeyboardButton(text="🖼 Перегенерировать фото", callback_data=f"regen_photo_{index}")],
+            [InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"publish_{index}")],
+        ],
+    )
+
+    caption = f"📰 [{channel_name}]\n\n{text_preview}\n\n🆔 ID: {msg_id}\n📅 {post.get('date', '')}"
+    if post.get("photo_path"):
+        await message.answer_photo(photo=post["photo_path"], caption=caption, reply_markup=kb)
+    else:
+        await send_with_topic(message.chat.id, caption, reply_markup=kb)
+
+
+# ---------- callbacks ----------
+
+@dp.callback_query(lambda c: c.data in ("noop",))
+async def handle_noop(callback: types.CallbackQuery):
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith(("prev_", "next_")))
+async def handle_nav(callback: types.CallbackQuery, state: FSMContext):
+    action, idx_str = callback.data.split("_", 1)
+    try:
+        index = int(idx_str)
+    except ValueError:
+        await callback.answer("❌ Ошибка")
+        return
+
+    state_data = await state.get_data()
+    posts = state_data.get("posts", [])
+    if not posts:
+        await callback.answer("❌ Нет постов")
+        return
+
+    if action == "prev":
+        index = max(0, index - 1)
+    elif action == "next":
+        index = min(len(posts) - 1, index + 1)
+
+    await show_post(None, posts, callback.message, state, index)
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("rewrite_") and not c.data.startswith("rewrite_custom_"))
+async def handle_rewrite(callback: types.CallbackQuery, state: FSMContext):
+    index = int(callback.data.split("_")[-1])
+    state_data = await state.get_data()
+    posts = state_data.get("posts", [])
+    if index >= len(posts):
+        await callback.answer("❌ Пост не найден")
+        return
+
+    await callback.answer("🔄 Переписываю...")
+    try:
+        post = posts[index]
+        new_text = regenerate_text(post["text"], "Переведи и перепиши на английский")
+        caption = f"✅ Рерайт (EN):\n\n{new_text}"
+        if post.get("photo_path"):
+            await callback.message.answer_photo(photo=post["photo_path"], caption=caption)
+        else:
+            await send_with_topic(callback.message.chat.id, caption)
+    except Exception as e:
+        logger.error(f"Rewrite error: {e}")
+        await callback.answer(f"❌ Ошибка: {e}")
+        await send_error(callback.message.chat.id, f"{e}")
+
+
+@dp.callback_query(lambda c: c.data.startswith("rewrite_custom_"))
+async def handle_rewrite_custom(callback: types.CallbackQuery, state: FSMContext):
+    index = int(callback.data.split("_")[-1])
+    await state.set_state(RewriteState.waiting_prompt)
+    await state.update_data(rewrite_index=index)
+    await send_with_topic(callback.message.chat.id, "✍️ Введи свой промпт для рерайта:")
+    await callback.answer()
+
+
+@dp.message(RewriteState.waiting_prompt)
+async def handle_rewrite_input(message: Message, state: FSMContext):
+    prompt = message.text
+    data = await state.get_data()
+    index = data.get("rewrite_index")
+    state_data = await state.get_data()
+    posts = state_data.get("posts", [])
+
+    if index >= len(posts):
+        await state.clear()
+        await send_error(message.chat.id, "Пост не найден")
+        return
+
+    await send_with_topic(message.chat.id, "🔄 Переписываю...")
+    try:
+        post = posts[index]
+        new_text = regenerate_text(post["text"], prompt)
+        caption = f"✅ Рерайт:\n\n{prompt}\n\n{new_text}"
+        if post.get("photo_path"):
+            await message.answer_photo(photo=post["photo_path"], caption=caption)
+        else:
+            await send_with_topic(message.chat.id, caption)
+    except Exception as e:
+        logger.error(f"Rewrite custom error: {e}")
+        await send_error(message.chat.id, f"{e}")
+
+    await state.clear()
+
+
+@dp.callback_query(lambda c: c.data.startswith("translate_"))
+async def handle_translate(callback: types.CallbackQuery, state: FSMContext):
+    index = int(callback.data.split("_")[-1])
+    state_data = await state.get_data()
+    posts = state_data.get("posts", [])
+    if index >= len(posts):
+        await callback.answer("❌ Пост не найден")
+        return
+
+    await callback.answer("🔄 Перевожу...")
+    try:
+        post = posts[index]
+        translated = regenerate_text(post["text"], "Переведи на английский язык. Сохрани смысл.")
+        caption = f"✅ Перевод (EN):\n\n{translated}"
+        if post.get("photo_path"):
+            await callback.message.answer_photo(photo=post["photo_path"], caption=caption)
+        else:
+            await send_with_topic(callback.message.chat.id, caption)
+    except Exception as e:
+        logger.error(f"Translate error: {e}")
+        await callback.answer(f"❌ Ошибка: {e}")
+        await send_error(callback.message.chat.id, f"{e}")
+
+
+@dp.callback_query(lambda c: c.data.startswith("regen_photo_"))
+async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMContext):
+    index = int(callback.data.split("_")[-1])
+    state_data = await state.get_data()
+    posts = state_data.get("posts", [])
+    if index >= len(posts):
+        await callback.answer("❌ Пост не найден")
+        return
+
+    post = posts[index]
+    if not post.get("photo_path"):
+        await callback.answer("❌ У поста нет фото")
+        return
+
+    await callback.answer("🖼 Перегенерирую...")
+    try:
+        new_photo = regenerate_photo(post["photo_path"], "Улучши качество, сделай ярче и контрастнее")
+        caption = f"✅ Фото переработано!\n\n{post['text'][:200]}"
+        await callback.message.answer_photo(photo=new_photo, caption=caption)
+    except Exception as e:
+        logger.error(f"Regen photo error: {e}")
+        await callback.answer(f"❌ Ошибка: {e}")
+        await send_error(callback.message.chat.id, f"{e}")
+
+
+@dp.callback_query(lambda c: c.data.startswith("publish_"))
+async def handle_publish(callback: types.CallbackQuery, state: FSMContext):
+    index = int(callback.data.split("_")[-1])
+    state_data = await state.get_data()
+    posts = state_data.get("posts", [])
+    if index >= len(posts):
+        await callback.answer("❌ Пост не найден")
+        return
+
+    await callback.answer("✅ Добавлено в очередь!")
+    post = posts[index]
+
+    # Регенерируем текст
+    new_text = regenerate_text(post["text"], "Переписываем пост для публикации")
+
+    post_id = enqueue_post(new_text, post.get("photo_path"), post.get("channel", ""), post["msg_id"])
+
+    await send_with_topic(
+        callback.message.chat.id,
+        f"📝 Пост #{post_id} добавлен в очередь.\n\n"
+        f"Нажмите /publish чтобы опубликовать одобренные посты.",
+    )
+
+
+@dp.message(Command("publish"))
+async def cmd_publish(message: Message):
+    pending = get_pending_posts()
+    if not pending:
+        await send_error(message.chat.id, "Очередь пуста. Нет постов для публикации.")
+        return
+
+    approved_count = 0
+    for post in pending:
+        await send_with_topic(message.chat.id, f"📤 Публикую #{post['id']}: {post['text'][:100]}...")
+        delay = random.randint(POST_DELAY_MIN, POST_DELAY_MAX)
+        await asyncio.sleep(delay * 60)
+
+        try:
+            await post_via_bot(post["text"], post.get("photo_path"))
+            mark_published(post["id"])
+            await send_with_topic(message.chat.id, f"✅ Пост #{post['id']} опубликован!")
+            approved_count += 1
+        except Exception as e:
+            logger.error(f"Publish error: {e}")
+            mark_failed(post["id"], str(e))
+            await send_with_topic(message.chat.id, f"❌ Ошибка поста #{post['id']}: {e}")
+
+    if approved_count:
+        await send_with_topic(message.chat.id, f"🎉 Опубликовано {approved_count} постов.")
+    else:
+        await send_with_topic(message.chat.id, "⚠️ Публикации завершены с ошибками.")
+
+
+# ---------- watch ----------
+
+@dp.message(Command("watch"))
+async def cmd_watch(message: Message):
+    chat_id = str(message.chat.id)
+    if chat_id in active_watches:
+        await send_with_topic(message.chat.id, "⏺ Мониторинг уже активен.")
+        return
+
+    active_watches[chat_id] = True
+    await send_with_topic(message.chat.id, "👁 Включаю мониторинг новых постов...")
+    asyncio.create_task(watch_loop(chat_id))
+
+
+@dp.message(Command("stop"))
+async def cmd_stop(message: Message):
+    chat_id = str(message.chat.id)
+    if chat_id in active_watches:
+        del active_watches[chat_id]
+        await send_with_topic(message.chat.id, "🛑 Мониторинг остановлен.")
+    else:
+        await send_with_topic(message.chat.id, "📭 Мониторинг не был активен.")
+
+
+async def watch_loop(chat_id: str):
+    """Постоянный мониторинг новых постов."""
+    parser = TGParser(phone=TELEPHONE)
+    await parser.start()
+    last_ids: set = set()
+
+    try:
+        while active_watches.get(chat_id):
+            try:
+                posts = await parser.fetch_with_photos(since_days=1)
+                new_posts = [p for p in posts if p.get("msg_id") not in last_ids]
+
+                if new_posts:
+                    last_ids.update(p.get("msg_id", 0) for p in new_posts)
+                    await send_with_topic(int(chat_id), f"📬 Найдено {len(new_posts)} новых постов!")
+                    # Сохраняем для просмотра
+                    # Примечание: FSM-состояние для другого чата — это workaround,
+                    # лучше бы использовать отдельное хранилище.
+                    # Для watch_loop достаточно уведомления, а не показа.
+            except Exception as e:
+                logger.error(f"Watch error: {e}")
+
+            await asyncio.sleep(300)
+    finally:
+        await parser.close()
+
+
 async def main():
     """Запуск бота."""
     logger.info("🚀 Запускаю TG Publisher бота...")
+    db.init_db()
     await dp.start_polling(bot)
 
 

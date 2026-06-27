@@ -28,23 +28,29 @@ async def post_via_bot(text: str, photo_path: str = None, chat_id: str = None):
     import aiohttp
 
     chat = chat_id or TARGET_CHANNEL
+    if not chat:
+        raise ValueError("TARGET_CHANNEL не задан — некуда публиковать")
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-    if photo_path:
-        with open(photo_path, "rb") as f:
-            files = {"photo": f}
-            data = {"chat_id": chat, "caption": text}
-            async with aiohttp.ClientSession() as session:
-                async with session.post(f"{url}/sendPhoto", data=data, files=files) as resp:
+    if photo_path and os.path.exists(photo_path):
+        async with aiohttp.ClientSession() as session:
+            with open(photo_path, "rb") as f:
+                form = aiohttp.FormData()
+                form.add_field("chat_id", str(chat))
+                form.add_field("caption", text[:1024])
+                form.add_field("photo", f, filename=os.path.basename(photo_path))
+                async with session.post(f"{url}/sendPhoto", data=form) as resp:
                     result = await resp.json()
-                    logger.info(f"📤 Пост отправлен через бота: {result}")
-                    return result
     else:
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{url}/sendMessage", json={"chat_id": chat, "text": text}) as resp:
                 result = await resp.json()
-                logger.info(f"📤 Пост отправлен через бота: {result}")
-                return result
+
+    if not result.get("ok"):
+        raise RuntimeError(f"Telegram API error: {result.get('description', result)}")
+    logger.info(f"📤 Пост отправлен через бота: msg_id={result['result'].get('message_id')}")
+    return result
 
 
 async def post_via_telethon(text: str, photo_path: str = None):

@@ -1,12 +1,15 @@
 """
-Регенерация изображения через GPT Image 2 (OpenAI-compatible, cc-vibe).
+Регенерация изображения через GPT Image (OpenAI-compatible, cc-vibe).
 """
 
+import base64
 import logging
 import os
+from pathlib import Path
+
 from openai import OpenAI
 
-from .config import OPENAI_BASE_URL, OPENAI_API_KEY, IMAGE_MODEL
+from .config import OPENAI_BASE_URL, OPENAI_API_KEY, IMAGE_MODEL, DATA_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -15,30 +18,72 @@ client = OpenAI(
     api_key=OPENAI_API_KEY,
 )
 
+GENERATED_DIR = DATA_DIR / "generated"
+GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _decode_image_response(data_item) -> bytes:
+    """Извлекаем байты картинки из ответа OpenAI (b64 или url)."""
+    b64 = getattr(data_item, "b64_json", None)
+    if b64:
+        return base64.b64decode(b64)
+
+    url = getattr(data_item, "url", None)
+    if url:
+        import urllib.request
+        with urllib.request.urlopen(url) as resp:
+            return resp.read()
+
+    raise ValueError("Ответ image API не содержит b64_json или url")
+
 
 def regenerate_photo(image_path: str, prompt: str) -> str:
     """
-    Перегенерируем фото через GPT Image 2 Edit.
+    Перегенерируем фото через image-edit API.
     Возвращаем путь к новому файлу.
     """
-    with open(image_path, "rb") as f:
-        image_data = f.read()
+    if not image_path or not os.path.exists(image_path):
+        raise FileNotFoundError(f"Файл изображения не найден: {image_path}")
 
-    response = client.images.edit(
+    with open(image_path, "rb") as f:
+        response = client.images.edit(
+            model=IMAGE_MODEL,
+            image=f,
+            prompt=prompt,
+            n=1,
+            size="1024x1024",
+        )
+
+    image_bytes = _decode_image_response(response.data[0])
+
+    output_path = GENERATED_DIR / f"regenerated_{os.path.basename(image_path)}"
+    if output_path.suffix.lower() not in (".jpg", ".jpeg", ".png"):
+        output_path = output_path.with_suffix(".png")
+
+    with open(output_path, "wb") as f:
+        f.write(image_bytes)
+
+    logger.info(f"🖼 Фото переработано: {output_path}")
+    return str(output_path)
+
+
+def generate_image(prompt: str, filename: str = "generated") -> str:
+    """
+    Генерируем новое изображение с нуля по промпту.
+    Возвращаем путь к файлу.
+    """
+    response = client.images.generate(
         model=IMAGE_MODEL,
-        image=image_data,
         prompt=prompt,
         n=1,
         size="1024x1024",
     )
 
-    # Сохраняем результат
-    output_dir = os.environ.get("DATA_DIR", "/app/data") / "generated"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = os.path.join(output_dir, f"regenerated_{os.path.basename(image_path)}")
+    image_bytes = _decode_image_response(response.data[0])
+    output_path = GENERATED_DIR / f"{filename}.png"
 
     with open(output_path, "wb") as f:
-        f.write(response.data[0].b64_bytes.encode())
+        f.write(image_bytes)
 
-    logger.info(f"🖼 Фото переработано: {output_path}")
-    return output_path
+    logger.info(f"🖼 Изображение сгенерировано: {output_path}")
+    return str(output_path)

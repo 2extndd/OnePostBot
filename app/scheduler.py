@@ -1,61 +1,60 @@
 """
-Очередь постов.
-Сохраняем в очередь, затем публикуем с задержкой.
+Очередь публикаций.
+Тонкая обёртка над слоем хранения db.py.
+
+Жизненный цикл поста:
+  pending   — спарсен, ждёт обработки/решения оператора
+  approved  — оператор одобрил, ждёт автопубликации по расписанию
+  published — опубликован в целевой канал
+  failed    — ошибка публикации
 """
 
-import json
-import os
-import glob
 import logging
-from datetime import datetime
+from typing import List, Dict, Optional
 
-from .config import QUEUE_DIR
+from . import db
 
 logger = logging.getLogger(__name__)
 
 
-def enqueue_post(text: str, photo_path: str = None, source_channel: str = "", msg_id: int = 0):
-    """Добавляем пост в очередь."""
-    post = {
-        "text": text,
-        "photo_path": photo_path,
-        "source_channel": source_channel,
-        "msg_id": msg_id,
-        "queued_at": datetime.now().isoformat(),
-        "status": "pending",
-    }
-
-    filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{msg_id}.json"
-    filepath = os.path.join(QUEUE_DIR, filename)
-
-    with open(filepath, "w") as f:
-        json.dump(post, f, indent=2, ensure_ascii=False)
-
-    logger.info(f"📝 Пост добавлен в очередь: {filepath}")
-    return filepath
+def enqueue_post(text: str, photo_path: Optional[str] = None,
+                 source_channel: str = "", msg_id: int = 0,
+                 status: str = "pending") -> int:
+    """Добавить пост в очередь. Возвращает id поста."""
+    return db.enqueue(text, photo_path, source_channel, msg_id, status=status)
 
 
-def get_pending_posts() -> list:
-    """Возвращаем список ожидающих постов."""
-    posts = []
-    for filepath in sorted(glob.glob(os.path.join(QUEUE_DIR, "*.json"))):
-        with open(filepath) as f:
-            post = json.load(f)
-        if post.get("status") == "pending":
-            post["_filepath"] = filepath
-            posts.append(post)
-    return posts
+def get_pending_posts() -> List[Dict]:
+    """Посты, ожидающие решения оператора."""
+    return db.get_queue(status="pending")
 
 
-def mark_processed(filepath: str):
-    """Помечаем пост как обработанный."""
-    with open(filepath) as f:
-        post = json.load(f)
-    post["status"] = "published"
-    post["published_at"] = datetime.now().isoformat()
-    with open(filepath, "w") as f:
-        json.dump(post, f, indent=2, ensure_ascii=False)
+def get_approved_posts() -> List[Dict]:
+    """Посты, одобренные к автопубликации."""
+    return db.get_queue(status="approved")
 
-    # Удаляем из очереди
-    os.remove(filepath)
-    logger.info(f"✅ Пост удалён из очереди: {filepath}")
+
+def get_post(post_id: int) -> Optional[Dict]:
+    return db.get_post(post_id)
+
+
+def approve_post(post_id: int):
+    db.set_status(post_id, "approved")
+
+
+def mark_published(post_id: int):
+    db.set_status(post_id, "published")
+
+
+def mark_failed(post_id: int, error: str):
+    db.set_status(post_id, "failed", error=error)
+
+
+def update_post(post_id: int, text: str, photo_path: Optional[str] = None):
+    db.update_text(post_id, text, photo_path)
+
+
+# Совместимость со старым API (filepath-based) — больше не используется,
+# оставлено, чтобы не падали внешние вызовы.
+def mark_processed(identifier=None):
+    logger.debug("mark_processed() вызван (legacy no-op)")

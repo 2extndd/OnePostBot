@@ -1,19 +1,14 @@
 """
 Парсер Telegram-каналов через Telethon.
-Читает последние сообщения из указанных каналов.
+Читает последние сообщения из указанных каналов, скачивает фото.
 """
 
-import asyncio
 import logging
-from datetime import datetime, timedelta
-from typing import List, Dict
+from datetime import datetime, timedelta, timezone
+from typing import List, Dict, Optional
 
 from telethon import TelegramClient
-from telethon.tl.types import (
-    Message,
-    MessageMediaPhoto,
-    MessageMediaDocument,
-)
+from telethon.tl.types import Message, MessageMediaPhoto, MessageMediaDocument
 
 from .config import (
     TELEGRAM_API_ID,
@@ -21,10 +16,14 @@ from .config import (
     SESSION_FILE,
     PARSE_CHANNELS,
     PARSE_DAYS,
-    PROCESSED_DB,
+    DATA_DIR,
 )
+from . import db
 
 logger = logging.getLogger(__name__)
+
+MEDIA_DIR = DATA_DIR / "media"
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class TGParser:
@@ -37,117 +36,85 @@ class TGParser:
         )
 
     async def start(self):
-        """Подключаемся к Telegram."""
-        await self.client.start(phone=self.phone or None)
+        """Подключаемся к Telegram. Не запускает интерактивный логин в Docker."""
+        await self.client.connect()
+        if not await self.client.is_user_authorized():
+            raise RuntimeError(
+                "Telethon-сессия не авторизована. "
+                "Выполните авторизацию (см. docs / _auth.py) и положите tg_session.session в data/."
+            )
         logger.info("✅ Подключено к Telegram")
 
     async def close(self):
-        await self.client.disconnect()
-
-    async def fetch_messages(
-        self,
-        channels: List[str] = None,
-        since_days: int = None,
-    ) -> List[Dict]:
-        """
-        Собираем сообщения из каналов.
-        Возвращаем список словарей:
-        {
-            "channel": "@channel",
-            "msg_id": 123,
-            "text": "...",
-            "photo_url": "..." | None,
-            "date": ...,
-        }
-        """
-        channels = channels or PARSE_CHANNELS
-        since = datetime.now() - timedelta(days=since_days or PARSE_DAYS)
-        all_messages = []
-
-        async with self.client:
-            for ch in channels:
-                try:
-                    entity = await self.client.get_entity(ch)
-                    logger.info(f"📡 Читаем канал: {ch}")
-
-                    async for msg in self.client.iter_messages(
-                        entity,
-                        limit=100,
-                        date_gte=since,
-                    ):
-                        if not isinstance(msg, Message):
-                            continue
-                        if msg.date < since:
-                            continue
-                        if msg.media:
-                            continue  # текстовые посты
-
-                        all_messages.append({
-                            "channel": getattr(entity, "title", ch),
-                            "channel_username": getattr(entity, "username", ch),
-                            "msg_id": msg.id,
-                            "text": msg.text or "",
-                            "photo_url": None,
-                            "date": msg.date.isoformat(),
-                        })
-                except Exception as e:
-                    logger.error(f"❌ Ошибка при чтении {ch}: {e}")
-
-        # Сортируем по дате
-        all_messages.sort(key=lambda m: m["date"])
-        logger.info(f"📊 Найдено {len(all_messages)} сообщений")
-        return all_messages
+        if self.client.is_connected():
+            await self.client.disconnect()
 
     async def fetch_with_photos(
         self,
-        channels: List[str] = None,
-        since_days: int = None,
+        channels: Optional[List[str]] = None,
+        since_days: Optional[int] = None,
+        limit: int = 100,
+        skip_processed: bool = False,
     ) -> List[Dict]:
         """
-        Альтернативная версия: берём посты с фото.
-        Скачиваем фото во временный файл и возвращаем путь.
+        Собираем посты из каналов, скачиваем фото в data/media.
+        Возвращаем список словарей с ключом photo_path (путь к локальному файлу или None).
         """
         channels = channels or PARSE_CHANNELS
-        since = datetime.now() - timedelta(days=since_days or PARSE_DAYS)
-        all_posts = []
+        since = datetime.now(timezone.utc) - timedelta(days=since_days or PARSE_DAYS)
+        all_posts: List[Dict] = []
 
-        async with self.client:
-            for ch in channels:
-                try:
-                    entity = await self.client.get_entity(ch)
-                    logger.info(f"📸 Читаем канал с медиа: {ch}")
+        for ch in channels:
+            try:
+                entity = await self.client.get_entity(ch)
+                channel_name = getattr(entity, "title", ch)
+                channel_username = getattr(entity, "username", None) or ch
+                logger.info(f"📸 Читаем канал: {ch}")
 
-                    async for msg in self.client.iter_messages(
-                        entity,
-                        limit=100,
-                        date_gte=since,
-                    ):
-                        if not isinstance(msg, Message):
-                            continue
-                        if msg.date < since:
-                            continue
+                async for msg in self.client.iter_messages(entity, limit=limit):
+                    if not isinstance(msg, Message):
+                        continue
 
-                        photo_url = None
-                        if msg.media and isinstance(msg.media, MessageMediaPhoto):
-                            photo = await msg.download_media()
-                            photo_url = str(photo)
-                        elif msg.media and isinstance(msg.media, MessageMediaDocument):
-                            # Фото в документе
-                            ext = ".jpg"
-                            photo = await msg.download_media(file=photo_url or f"/tmp/photo_{msg.id}{ext}")
-                            photo_url = str(photo)
+                    msg_date = msg.date
+                    if msg_date and msg_date < since:
+                        break  # сообщения идут от новых к старым
 
-                        all_posts.append({
-                            "channel": getattr(entity, "title", ch),
-                            "channel_username": getattr(entity, "username", ch),
-                            "msg_id": msg.id,
-                            "text": msg.text or "",
-                            "photo_url": photo_url,
-                            "date": msg.date.isoformat(),
-                        })
-                except Exception as e:
-                    logger.error(f"❌ Ошибка при чтении {ch}: {e}")
+                    if not (msg.text or msg.media):
+                        continue
+
+                    if skip_processed and db.is_processed(channel_username, msg.id):
+                        continue
+
+                    photo_path = await self._download_photo(msg)
+
+                    all_posts.append({
+                        "channel": channel_name,
+                        "channel_username": channel_username,
+                        "msg_id": msg.id,
+                        "text": msg.text or "",
+                        "photo_path": photo_path,
+                        "date": msg_date.isoformat() if msg_date else "",
+                    })
+
+                    if skip_processed:
+                        db.mark_seen(channel_username, msg.id)
+            except Exception as e:
+                logger.error(f"❌ Ошибка при чтении {ch}: {e}")
 
         all_posts.sort(key=lambda m: m["date"])
-        logger.info(f"📊 Найдено {len(all_posts)} постов с медиа")
+        logger.info(f"📊 Найдено {len(all_posts)} постов")
         return all_posts
+
+    async def _download_photo(self, msg: Message) -> Optional[str]:
+        """Скачиваем фото сообщения в data/media. Возвращаем путь или None."""
+        if not msg.media:
+            return None
+        if not isinstance(msg.media, (MessageMediaPhoto, MessageMediaDocument)):
+            return None
+        try:
+            target = MEDIA_DIR / f"{msg.chat_id}_{msg.id}"
+            path = await msg.download_media(file=str(target))
+            return str(path) if path else None
+        except Exception as e:
+            logger.error(f"❌ Не удалось скачать медиа msg {msg.id}: {e}")
+            return None
