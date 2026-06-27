@@ -25,7 +25,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.exceptions import TelegramForbiddenError
 
 from .config import (
-    BOT_TOKEN, TOPIC_ID, CHAT_ID,
+    BOT_TOKEN, TOPIC_ID, CHAT_ID, TOPICS,
     PARSE_CHANNELS, PARSE_DAYS,
     POST_DELAY_MIN, POST_DELAY_MAX,
     TELEPHONE,
@@ -408,9 +408,16 @@ async def cmd_publish(message: Message):
         await asyncio.sleep(delay * 60)
 
         try:
-            await post_via_bot(post["text"], post.get("photo_path"))
+            # Публикуем во все топики из TOPICS
+            for topic in TOPICS:
+                await post_via_bot(
+                    post["text"],
+                    post.get("photo_path"),
+                    chat_id=str(topic["chat_id"]),
+                    topic_id=topic["topic_id"]
+                )
             mark_published(post["id"])
-            await send_with_topic(message.chat.id, f"✅ Пост #{post['id']} опубликован!")
+            await send_with_topic(message.chat.id, f"✅ Пост #{post['id']} опубликован во все топики!")
             approved_count += 1
         except Exception as e:
             logger.error(f"Publish error: {e}")

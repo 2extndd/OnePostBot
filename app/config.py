@@ -19,7 +19,20 @@ TELEPHONE = os.environ.get("TELEPHONE", "")
 PARSE_CHANNELS = [c.strip() for c in os.environ.get("PARSE_CHANNELS", "").split(",") if c.strip()]
 TARGET_CHANNEL = os.environ.get("TARGET_CHANNEL", "")
 
-# Topic
+# Topics (multiple)
+TOPICS = []
+if os.environ.get("CHAT_ID") and os.environ.get("TOPIC_ID"):
+    TOPICS.append({
+        "chat_id": int(os.environ.get("CHAT_ID")),
+        "topic_id": int(os.environ.get("TOPIC_ID"))
+    })
+if os.environ.get("CHAT_ID_2") and os.environ.get("TOPIC_ID_2"):
+    TOPICS.append({
+        "chat_id": int(os.environ.get("CHAT_ID_2")),
+        "topic_id": int(os.environ.get("TOPIC_ID_2"))
+    })
+
+# Backward compat
 TOPIC_ID = int(os.environ.get("TOPIC_ID", "0"))
 CHAT_ID = os.environ.get("CHAT_ID", "")
 

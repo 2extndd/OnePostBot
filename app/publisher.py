@@ -23,15 +23,20 @@ from .config import (
 logger = logging.getLogger(__name__)
 
 
-async def post_via_bot(text: str, photo_path: str = None, chat_id: str = None):
+async def post_via_bot(text: str, photo_path: str = None, chat_id: str = None, topic_id: int = None):
     """Публикация через бота (Telegram Bot API)."""
     import aiohttp
 
     chat = chat_id or TARGET_CHANNEL
     if not chat:
-        raise ValueError("TARGET_CHANNEL не задан — некуда публиковать")
+        raise ValueError("TARGET_CHANNEL или chat_id не задан — некуда публиковать")
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+    # Подготовим общие параметры
+    base_params = {"chat_id": str(chat), "text": text}
+    if topic_id:
+        base_params["message_thread_id"] = topic_id
 
     if photo_path and os.path.exists(photo_path):
         async with aiohttp.ClientSession() as session:
@@ -39,17 +44,22 @@ async def post_via_bot(text: str, photo_path: str = None, chat_id: str = None):
                 form = aiohttp.FormData()
                 form.add_field("chat_id", str(chat))
                 form.add_field("caption", text[:1024])
+                if topic_id:
+                    form.add_field("message_thread_id", str(topic_id))
                 form.add_field("photo", f, filename=os.path.basename(photo_path))
                 async with session.post(f"{url}/sendPhoto", data=form) as resp:
                     result = await resp.json()
     else:
         async with aiohttp.ClientSession() as session:
-            async with session.post(f"{url}/sendMessage", json={"chat_id": chat, "text": text}) as resp:
+            payload = {"chat_id": str(chat), "text": text}
+            if topic_id:
+                payload["message_thread_id"] = topic_id
+            async with session.post(f"{url}/sendMessage", json=payload) as resp:
                 result = await resp.json()
 
     if not result.get("ok"):
         raise RuntimeError(f"Telegram API error: {result.get('description', result)}")
-    logger.info(f"📤 Пост отправлен через бота: msg_id={result['result'].get('message_id')}")
+    logger.info(f"📤 Пост отправлен через бота: chat={chat}, topic={topic_id}, msg_id={result['result'].get('message_id')}")
     return result
 
 
