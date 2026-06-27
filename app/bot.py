@@ -58,7 +58,6 @@ class ParseState(StatesGroup):
 
 class ChannelState(StatesGroup):
     waiting_add = State()
-    waiting_del = State()
 
 
 class SettingsState(StatesGroup):
@@ -67,40 +66,44 @@ class SettingsState(StatesGroup):
 
 # ---------- keyboards ----------
 
-def settings_menu_kb():
-    """Меню настроек промптов."""
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📄 Контекст проекта")],
-            [KeyboardButton(text="📝 Промпт рерайта"), KeyboardButton(text="🎯 Промпт рекламы")],
-            [KeyboardButton(text="👁 Показать все настройки")],
-            [KeyboardButton(text="🔙 Главное меню")],
-        ],
-        resize_keyboard=True,
-    )
-
 def main_menu_kb():
-    """Главное меню."""
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📥 Парсить посты")],
-            [KeyboardButton(text="📚 Управление каналами"), KeyboardButton(text="📤 Опубликовать")],
-            [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="❓ Помощь")],
+    """Главное меню (inline)."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📥 Парсить посты", callback_data="menu_parse")],
+        [
+            InlineKeyboardButton(text="📚 Управление каналами", callback_data="menu_channels"),
+            InlineKeyboardButton(text="📤 Опубликовать", callback_data="menu_publish"),
         ],
-        resize_keyboard=True,
-    )
+        [
+            InlineKeyboardButton(text="⚙️ Настройки", callback_data="menu_settings"),
+            InlineKeyboardButton(text="❓ Помощь", callback_data="menu_help"),
+        ],
+    ])
 
 
 def channels_menu_kb():
-    """Меню управления каналами."""
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📋 Список каналов")],
-            [KeyboardButton(text="➕ Добавить канал"), KeyboardButton(text="➖ Удалить канал")],
-            [KeyboardButton(text="🔙 Главное меню")],
+    """Меню управления каналами (inline)."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Список каналов", callback_data="channels_list")],
+        [
+            InlineKeyboardButton(text="➕ Добавить канал", callback_data="channels_add"),
+            InlineKeyboardButton(text="➖ Удалить канал", callback_data="channels_del"),
         ],
-        resize_keyboard=True,
-    )
+        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="menu_main")],
+    ])
+
+
+def settings_menu_kb():
+    """Меню настроек промптов (inline)."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📄 Контекст проекта", callback_data="settings_project_context")],
+        [
+            InlineKeyboardButton(text="📝 Промпт рерайта", callback_data="settings_rewrite_prompt"),
+            InlineKeyboardButton(text="🎯 Промпт рекламы", callback_data="settings_ad_prompt"),
+        ],
+        [InlineKeyboardButton(text="👁 Показать все", callback_data="settings_show_all")],
+        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="menu_main")],
+    ])
 
 
 # ---------- helpers ----------
@@ -173,6 +176,11 @@ def thread_of(message: Message):
 async def send_error(chat_id: int, text: str, thread_id=_UNSET):
     """Отправить ошибку."""
     await send_with_topic(chat_id, f"❌ {text}", thread_id=thread_id)
+
+
+async def cb_send(callback, text, reply_markup=None):
+    """Ответ на callback в тот же чат/тред (через middleware-контекст)."""
+    await send_with_topic(callback.message.chat.id, text, reply_markup=reply_markup)
 
 
 # ---------- commands ----------
@@ -624,117 +632,63 @@ async def cmd_stop(message: Message):
         await send_with_topic(message.chat.id, "📭 Мониторинг не был активен.")
 
 
-# ---------- MENU BUTTON HANDLERS ----------
+# ---------- MENU CALLBACK HANDLERS (inline) ----------
 
-@dp.message(F.text == "📥 Парсить посты")
-async def menu_parse(message: Message, state: FSMContext):
+@dp.callback_query(F.data == "menu_main")
+async def cb_menu_main(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await cb_send(callback, "🏠 Главное меню:", reply_markup=main_menu_kb())
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "menu_parse")
+async def cb_menu_parse(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(ParseState.waiting_count)
-    kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="5"), KeyboardButton(text="10"), KeyboardButton(text="20")],
-            [KeyboardButton(text="🔙 Главное меню")],
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="5", callback_data="parse_n_5"),
+            InlineKeyboardButton(text="10", callback_data="parse_n_10"),
+            InlineKeyboardButton(text="20", callback_data="parse_n_20"),
         ],
-        resize_keyboard=True,
+        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="menu_main")],
+    ])
+    await cb_send(callback, 
+        "Сколько последних постов спарсить? Выберите или отправьте число:",
+        reply_markup=kb,
     )
-    await send_with_topic(message.chat.id, "Сколько последних постов спарсить? Введите число или выберите:", reply_markup=kb)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("parse_n_"))
+async def cb_parse_n(callback: types.CallbackQuery, state: FSMContext):
+    count = int(callback.data.split("_")[-1])
+    await state.clear()
+    await callback.answer(f"🔍 Парсю {count} постов...")
+    await cb_send(callback, f"🔍 Парсю последние {count} постов...")
+    await do_parse(callback.message, state, count=count)
 
 
 @dp.message(ParseState.waiting_count)
 async def menu_parse_count(message: Message, state: FSMContext):
-    if message.text == "🔙 Главное меню":
-        await state.clear()
-        await send_with_topic(message.chat.id, "🏠 Главное меню", reply_markup=main_menu_kb())
-        return
     try:
         count = int(message.text.strip())
-    except ValueError:
+    except (ValueError, AttributeError):
         await send_with_topic(message.chat.id, "Введите число, например 10.")
         return
     await state.clear()
-    await send_with_topic(message.chat.id, f"🔍 Парсю последние {count} постов...", reply_markup=main_menu_kb())
+    await send_with_topic(message.chat.id, f"🔍 Парсю последние {count} постов...")
     await do_parse(message, state, count=count)
 
 
-@dp.message(F.text == "📤 Опубликовать")
-async def menu_publish(message: Message):
-    await do_publish(message)
+@dp.callback_query(F.data == "menu_publish")
+async def cb_menu_publish(callback: types.CallbackQuery):
+    await callback.answer("📤 Публикую...")
+    await do_publish(callback.message)
 
 
-@dp.message(F.text == "⚙️ Настройки")
-async def menu_settings(message: Message):
-    channels = db.get_channels()
-    ch_text = ", ".join(f"@{c}" for c in channels) if channels else "нет"
-    topics_text = "\n".join(f"  • chat={t['chat_id']}, topic={t['topic_id']}" for t in TOPICS)
-    await send_with_topic(
-        message.chat.id,
-        f"⚙️ Настройки:\n\n"
-        f"📚 Каналы: {ch_text}\n"
-        f"📍 Топики публикации:\n{topics_text}\n"
-        f"📅 Дней назад: {PARSE_DAYS}\n"
-        f"⏱ Задержка постинга: {POST_DELAY_MIN}-{POST_DELAY_MAX} мин\n\n"
-        f"Ниже — настройка AI-промптов:",
-        reply_markup=settings_menu_kb(),
-    )
-
-
-# Маппинг кнопок настроек на ключи в БД
-_SETTING_KEYS = {
-    "📄 Контекст проекта": "project_context",
-    "📝 Промпт рерайта": "rewrite_prompt",
-    "🎯 Промпт рекламы": "ad_prompt",
-}
-
-
-@dp.message(F.text.in_(list(_SETTING_KEYS.keys())))
-async def menu_edit_setting(message: Message, state: FSMContext):
-    key = _SETTING_KEYS[message.text]
-    current = db.get_setting(key)
-    await state.set_state(SettingsState.waiting_value)
-    await state.update_data(setting_key=key)
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 Настройки")]], resize_keyboard=True)
-    await send_with_topic(
-        message.chat.id,
-        f"Текущее значение «{message.text}»:\n\n{current}\n\n"
-        f"✍️ Отправьте новый текст, чтобы заменить:",
-        reply_markup=kb,
-    )
-
-
-@dp.message(SettingsState.waiting_value)
-async def menu_save_setting(message: Message, state: FSMContext):
-    if message.text in ("🔙 Настройки", "🔙 Главное меню"):
-        await state.clear()
-        await send_with_topic(message.chat.id, "⚙️ Настройки промптов:", reply_markup=settings_menu_kb())
-        return
-    data = await state.get_data()
-    key = data.get("setting_key")
-    db.set_setting(key, message.text)
-    await state.clear()
-    await send_with_topic(message.chat.id, f"✅ Сохранено!", reply_markup=settings_menu_kb())
-
-
-@dp.message(F.text == "👁 Показать все настройки")
-async def menu_show_settings(message: Message):
-    s = db.get_all_settings()
-    await send_with_topic(
-        message.chat.id,
-        f"📄 КОНТЕКСТ ПРОЕКТА:\n{s['project_context']}\n\n"
-        f"📝 ПРОМПТ РЕРАЙТА:\n{s['rewrite_prompt']}\n\n"
-        f"🎯 ПРОМПТ РЕКЛАМЫ:\n{s['ad_prompt']}",
-        reply_markup=settings_menu_kb(),
-    )
-
-
-@dp.message(F.text == "🔙 Настройки")
-async def menu_back_settings(message: Message, state: FSMContext):
-    await state.clear()
-    await send_with_topic(message.chat.id, "⚙️ Настройки промптов:", reply_markup=settings_menu_kb())
-
-
-@dp.message(F.text == "❓ Помощь")
-async def menu_help(message: Message):
-    await send_with_topic(
-        message.chat.id,
+@dp.callback_query(F.data == "menu_help")
+async def cb_menu_help(callback: types.CallbackQuery):
+    await cb_send(callback, 
         "📋 Как пользоваться:\n\n"
         "1️⃣ «Управление каналами» → добавьте каналы для парсинга\n"
         "2️⃣ «Настройки» → настройте контекст проекта и промпты\n"
@@ -749,40 +703,110 @@ async def menu_help(message: Message):
         "5️⃣ «Опубликовать» → публикация во все топики",
         reply_markup=main_menu_kb(),
     )
+    await callback.answer()
 
 
-# ---------- channels menu ----------
+# ---------- settings (inline) ----------
 
-@dp.message(F.text == "📚 Управление каналами")
-async def menu_channels(message: Message):
-    await send_with_topic(message.chat.id, "📚 Управление каналами:", reply_markup=channels_menu_kb())
+@dp.callback_query(F.data == "menu_settings")
+async def cb_menu_settings(callback: types.CallbackQuery):
+    channels = db.get_channels()
+    ch_text = ", ".join(f"@{c}" for c in channels) if channels else "нет"
+    topics_text = "\n".join(f"  • chat={t['chat_id']}, topic={t['topic_id']}" for t in TOPICS)
+    await cb_send(callback, 
+        f"⚙️ Настройки:\n\n"
+        f"📚 Каналы: {ch_text}\n"
+        f"📍 Топики публикации:\n{topics_text}\n"
+        f"📅 Дней назад: {PARSE_DAYS}\n"
+        f"⏱ Задержка постинга: {POST_DELAY_MIN}-{POST_DELAY_MAX} мин\n\n"
+        f"Ниже — настройка AI-промптов:",
+        reply_markup=settings_menu_kb(),
+    )
+    await callback.answer()
 
 
-@dp.message(F.text == "📋 Список каналов")
-async def menu_channels_list(message: Message):
+# Маппинг callback → ключ в БД + читаемое имя
+_SETTING_KEYS = {
+    "settings_project_context": ("project_context", "📄 Контекст проекта"),
+    "settings_rewrite_prompt": ("rewrite_prompt", "📝 Промпт рерайта"),
+    "settings_ad_prompt": ("ad_prompt", "🎯 Промпт рекламы"),
+}
+
+
+@dp.callback_query(F.data.in_(list(_SETTING_KEYS.keys())))
+async def cb_edit_setting(callback: types.CallbackQuery, state: FSMContext):
+    key, name = _SETTING_KEYS[callback.data]
+    current = db.get_setting(key)
+    await state.set_state(SettingsState.waiting_value)
+    await state.update_data(setting_key=key)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Настройки", callback_data="menu_settings")],
+    ])
+    await cb_send(callback, 
+        f"Текущее значение «{name}»:\n\n{current}\n\n"
+        f"✍️ Отправьте новый текст, чтобы заменить:",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@dp.message(SettingsState.waiting_value)
+async def menu_save_setting(message: Message, state: FSMContext):
+    data = await state.get_data()
+    key = data.get("setting_key")
+    db.set_setting(key, message.text)
+    await state.clear()
+    await send_with_topic(message.chat.id, "✅ Сохранено!", reply_markup=settings_menu_kb())
+
+
+@dp.callback_query(F.data == "settings_show_all")
+async def cb_show_settings(callback: types.CallbackQuery):
+    s = db.get_all_settings()
+    await cb_send(callback, 
+        f"📄 КОНТЕКСТ ПРОЕКТА:\n{s['project_context']}\n\n"
+        f"📝 ПРОМПТ РЕРАЙТА:\n{s['rewrite_prompt']}\n\n"
+        f"🎯 ПРОМПТ РЕКЛАМЫ:\n{s['ad_prompt']}",
+        reply_markup=settings_menu_kb(),
+    )
+    await callback.answer()
+
+
+# ---------- channels (inline) ----------
+
+@dp.callback_query(F.data == "menu_channels")
+async def cb_menu_channels(callback: types.CallbackQuery):
+    await cb_send(callback, "📚 Управление каналами:", reply_markup=channels_menu_kb())
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "channels_list")
+async def cb_channels_list(callback: types.CallbackQuery):
     channels = db.get_channels()
     if not channels:
-        await send_with_topic(message.chat.id, "📭 Список пуст. Нажмите «Добавить канал».", reply_markup=channels_menu_kb())
-        return
-    text = "📚 Каналы для парсинга:\n" + "\n".join(f"• @{ch}" for ch in channels)
-    await send_with_topic(message.chat.id, text, reply_markup=channels_menu_kb())
+        await cb_send(callback, "📭 Список пуст. Нажмите «Добавить канал».", reply_markup=channels_menu_kb())
+    else:
+        text = "📚 Каналы для парсинга:\n" + "\n".join(f"• @{ch}" for ch in channels)
+        await cb_send(callback, text, reply_markup=channels_menu_kb())
+    await callback.answer()
 
 
-@dp.message(F.text == "➕ Добавить канал")
-async def menu_channels_add(message: Message, state: FSMContext):
+@dp.callback_query(F.data == "channels_add")
+async def cb_channels_add(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(ChannelState.waiting_add)
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 Управление каналами")]], resize_keyboard=True)
-    await send_with_topic(message.chat.id, "Введите @username канала (можно несколько через пробел):", reply_markup=kb)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Управление каналами", callback_data="menu_channels")],
+    ])
+    await cb_send(callback, 
+        "Отправьте @username канала (можно несколько через пробел):",
+        reply_markup=kb,
+    )
+    await callback.answer()
 
 
 @dp.message(ChannelState.waiting_add)
 async def menu_channels_add_input(message: Message, state: FSMContext):
-    if message.text in ("🔙 Управление каналами", "🔙 Главное меню"):
-        await state.clear()
-        await send_with_topic(message.chat.id, "📚 Управление каналами:", reply_markup=channels_menu_kb())
-        return
     added = []
-    for token in message.text.split():
+    for token in (message.text or "").split():
         username = token.strip().lstrip("@")
         if username:
             db.add_channel(username)
@@ -792,38 +816,26 @@ async def menu_channels_add_input(message: Message, state: FSMContext):
     await send_with_topic(message.chat.id, txt, reply_markup=channels_menu_kb())
 
 
-@dp.message(F.text == "➖ Удалить канал")
-async def menu_channels_del(message: Message, state: FSMContext):
+@dp.callback_query(F.data == "channels_del")
+async def cb_channels_del(callback: types.CallbackQuery, state: FSMContext):
     channels = db.get_channels()
     if not channels:
-        await send_with_topic(message.chat.id, "📭 Список пуст.", reply_markup=channels_menu_kb())
+        await cb_send(callback, "📭 Список пуст.", reply_markup=channels_menu_kb())
+        await callback.answer()
         return
-    await state.set_state(ChannelState.waiting_del)
-    rows = [[KeyboardButton(text=f"@{ch}")] for ch in channels]
-    rows.append([KeyboardButton(text="🔙 Управление каналами")])
-    kb = ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
-    await send_with_topic(message.chat.id, "Выберите канал для удаления:", reply_markup=kb)
+    rows = [[InlineKeyboardButton(text=f"➖ @{ch}", callback_data=f"delch_{ch}")] for ch in channels]
+    rows.append([InlineKeyboardButton(text="🔙 Управление каналами", callback_data="menu_channels")])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    await cb_send(callback, "Выберите канал для удаления:", reply_markup=kb)
+    await callback.answer()
 
 
-@dp.message(ChannelState.waiting_del)
-async def menu_channels_del_input(message: Message, state: FSMContext):
-    if message.text in ("🔙 Управление каналами", "🔙 Главное меню"):
-        await state.clear()
-        await send_with_topic(message.chat.id, "📚 Управление каналами:", reply_markup=channels_menu_kb())
-        return
-    username = message.text.strip().lstrip("@")
+@dp.callback_query(F.data.startswith("delch_"))
+async def cb_del_channel(callback: types.CallbackQuery):
+    username = callback.data[len("delch_"):]
     db.remove_channel(username)
-    await state.clear()
-    await send_with_topic(message.chat.id, f"✅ Канал @{username} удалён", reply_markup=channels_menu_kb())
-
-
-@dp.message(F.text.in_(["🔙 Главное меню", "🔙 Управление каналами"]))
-async def menu_back(message: Message, state: FSMContext):
-    await state.clear()
-    if message.text == "🔙 Управление каналами":
-        await send_with_topic(message.chat.id, "📚 Управление каналами:", reply_markup=channels_menu_kb())
-    else:
-        await send_with_topic(message.chat.id, "🏠 Главное меню", reply_markup=main_menu_kb())
+    await callback.answer(f"✅ @{username} удалён")
+    await cb_send(callback, f"✅ Канал @{username} удалён", reply_markup=channels_menu_kb())
 
 
 async def watch_loop(chat_id: str):
