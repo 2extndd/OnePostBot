@@ -1,7 +1,7 @@
 # Codebase Map
 
-Generated: 2026-06-28T13:50:57Z | Files: 23 | Described: 0/23
-<!-- gsd:codebase-meta {"generatedAt":"2026-06-28T13:50:57Z","fingerprint":"e089588b3da6081d63a559258ac732a236f231ef","fileCount":23,"truncated":false} -->
+Generated: 2026-06-28T16:23:36Z | Files: 23 | Described: 0/23
+<!-- gsd:codebase-meta {"generatedAt":"2026-06-28T16:23:36Z","fingerprint":"e089588b3da6081d63a559258ac732a236f231ef","fileCount":23,"truncated":false} -->
 
 ### (root)/
 - `_auth.py`
