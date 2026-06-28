@@ -48,7 +48,7 @@ from .parser import TGParser
 from .text_regen import regenerate_text, generate_caption_for_photo, rewrite_news, add_ad, translate_text
 from .image_regen import regenerate_photo
 from .publisher import post_via_bot
-from .scheduler import enqueue_post, get_pending_posts, approve_post, mark_published, mark_failed, get_post, update_post
+from .scheduler import enqueue_post, get_pending_posts, get_approved_posts, approve_post, mark_published, mark_failed, get_post, update_post
 from . import db
 
 logging.basicConfig(level=logging.INFO)

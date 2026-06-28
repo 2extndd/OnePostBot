@@ -232,3 +232,5 @@
 {"id":"d4da7ede-247a-428a-9892-86cf52d9c25c","ts":"2026-06-28T00:48:42.657Z","severity":"warning","message":"Provider switch anthropic-messages → anthropic-messages: 13 thinking downgraded","source":"workflow-logger","read":false}
 {"id":"95259f4a-545b-44cd-9f15-9ed0855d157d","ts":"2026-06-28T00:49:20.854Z","severity":"warning","message":"Provider switch anthropic-messages → anthropic-messages: 13 thinking downgraded","source":"workflow-logger","read":false}
 {"id":"12bbd287-47c7-4003-b5dd-b0ce48bac5b4","ts":"2026-06-28T00:50:02.177Z","severity":"warning","message":"Provider switch anthropic-messages → anthropic-messages: 13 thinking downgraded","source":"workflow-logger","read":false}
+{"id":"b29aa2c8-a526-4d17-8041-0078b24d7227","ts":"2026-06-28T00:50:39.858Z","severity":"warning","message":"Provider switch anthropic-messages → anthropic-messages: 13 thinking downgraded","source":"workflow-logger","read":false}
+{"id":"6fd2240f-1ee6-463d-b9f5-291da0d0d847","ts":"2026-06-28T00:51:18.049Z","severity":"warning","message":"Provider switch anthropic-messages → anthropic-messages: 13 thinking downgraded","source":"workflow-logger","read":false}
