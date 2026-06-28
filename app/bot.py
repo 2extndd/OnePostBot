@@ -455,7 +455,7 @@ async def handle_rewrite(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer("🔄 Переписываю...")
     try:
         post = posts[index]
-        new_text = rewrite_news(post["text"])
+        new_text = await rewrite_news(post["text"])
         posts[index]["edited_text"] = new_text
         posts[index]["showing_original"] = False
         await state.update_data(posts=posts)
@@ -490,7 +490,7 @@ async def handle_rewrite_input(message: Message, state: FSMContext):
     await send_with_topic(message.chat.id, "🔄 Переписываю...")
     try:
         post = posts[index]
-        new_text = rewrite_news(post["text"], custom_prompt=prompt)
+        new_text = await rewrite_news(post["text"], custom_prompt=prompt)
         posts[index]["edited_text"] = new_text
         posts[index]["showing_original"] = False
         await state.update_data(posts=posts)
@@ -520,7 +520,7 @@ async def handle_translate(callback: types.CallbackQuery, state: FSMContext):
         post = posts[index]
         # Переводим текущую версию (рерайт, если есть), иначе оригинал
         base_text = post["text"] if post.get("showing_original") else (post.get("edited_text") or post["text"])
-        translated = translate_text(base_text)
+        translated = await translate_text(base_text)
         posts[index]["edited_text"] = translated
         posts[index]["showing_original"] = False
         await state.update_data(posts=posts)
@@ -545,7 +545,7 @@ async def handle_ad(callback: types.CallbackQuery, state: FSMContext):
         post = posts[index]
         # Реклама в текущую версию: оригинал (если свитч) или рерайт
         base_text = post["text"] if post.get("showing_original") else (post.get("edited_text") or post["text"])
-        new_text = add_ad(base_text)
+        new_text = await add_ad(base_text)
         posts[index]["edited_text"] = new_text
         posts[index]["showing_original"] = False
         await state.update_data(posts=posts)
@@ -603,7 +603,7 @@ async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMConte
     await callback.answer("🖼 Перегенерирую...")
     try:
         image_prompt = db.get_setting("image_prompt")
-        new_photo = regenerate_photo(post["photo_path"], image_prompt)
+        new_photo = await regenerate_photo(post["photo_path"], image_prompt)
         caption = f"✅ Фото переработано!\n\n{post['text'][:200]}"
         await callback.message.answer_photo(photo=_photo(new_photo), caption=_cap(caption), parse_mode="HTML")
     except Exception as e:
@@ -643,41 +643,66 @@ async def do_publish(message: Message):
     """Общая логика публикации — вызывается из команды и из меню."""
     pending = get_pending_posts()
     if not pending:
-        await send_error(message.chat.id, "Очередь пуста. Нет постов для публикации.")
+        await send_error(message.chat.id, "📭 Очередь пуста. Используйте /parse для загрузки постов.")
         return
 
-    approved_count = 0
+    count = 0
     for post in pending:
-        await send_with_topic(message.chat.id, f"📤 Публикую #{post['id']}: {post['text'][:100]}...")
-        delay = random.randint(POST_DELAY_MIN, POST_DELAY_MAX)
-        await asyncio.sleep(delay * 60)
+        approve_post(post["id"])
+        count += 1
 
+    await send_with_topic(
+        message.chat.id,
+        f"✅ Добавлено {count} постов в очередь публикации.\n"
+        f"Публикация начнётся автоматически через {POST_DELAY_MIN}-{POST_DELAY_MAX} мин."
+    )
+
+
+async def publish_worker(chat_id: int):
+    """Фоновый воркер: публикует одобренные посты с задержкой.
+    Запускается при старте бота (bot.main)."""
+    logger.info("📤 Запущен фоновый воркер публикации")
+    while True:
         try:
-            # Публикуем во все топики из TOPICS
-            for topic in TOPICS:
-                await post_via_bot(
-                    post["text"],
-                    post.get("photo_path"),
-                    chat_id=str(topic["chat_id"]),
-                    topic_id=topic["topic_id"]
-                )
-            mark_published(post["id"])
-            await send_with_topic(message.chat.id, f"✅ Пост #{post['id']} опубликован во все топики!")
-            approved_count += 1
-        except Exception as e:
-            logger.error(f"Publish error: {e}")
-            mark_failed(post["id"], str(e))
-            await send_with_topic(message.chat.id, f"❌ Ошибка поста #{post['id']}: {e}")
+            # Восстанавливаем «зависшие» approved/failed посты после рестарта
+            stuck = get_pending_posts()
+            for p in stuck:
+                mark_published(p["id"])
 
-    if approved_count:
-        await send_with_topic(message.chat.id, f"🎉 Опубликовано {approved_count} постов.")
-    else:
-        await send_with_topic(message.chat.id, "⚠️ Публикации завершены с ошибками.")
+            approved = get_approved_posts()
+            if not approved:
+                await asyncio.sleep(30)
+                continue
+
+            post = approved[0]
+            await send_with_topic(chat_id, f"📤 Публикую #{post['id']}: {post['text'][:100]}...")
+            delay = random.randint(POST_DELAY_MIN, POST_DELAY_MAX)
+            await asyncio.sleep(delay * 60)
+
+            try:
+                for topic in TOPICS:
+                    await post_via_bot(
+                        post["text"],
+                        post.get("photo_path"),
+                        chat_id=str(topic["chat_id"]),
+                        topic_id=topic["topic_id"]
+                    )
+                mark_published(post["id"])
+                await send_with_topic(chat_id, f"✅ Пост #{post['id']} опубликован!")
+            except Exception as e:
+                logger.error(f"Publish error: {e}")
+                mark_failed(post["id"], str(e))
+                await send_with_topic(chat_id, f"❌ Ошибка поста #{post['id']}: {e}")
+
+        except Exception as e:
+            logger.error(f"Publish worker error: {e}")
+            await asyncio.sleep(60)
 
 
 @dp.message(Command("publish"))
 async def cmd_publish(message: Message):
     await do_publish(message)
+
 
 
 # ---------- watch ----------
@@ -943,6 +968,8 @@ async def main():
     """Запуск бота."""
     logger.info("🚀 Запускаю TG Publisher бота...")
     db.init_db()
+    # Запускаем фоновый воркер публикации
+    asyncio.create_task(publish_worker(CHAT_ID))
     await dp.start_polling(bot)
 
 

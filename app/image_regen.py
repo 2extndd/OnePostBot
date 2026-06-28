@@ -2,18 +2,21 @@
 Регенерация изображения через GPT Image (OpenAI-compatible, cc-vibe).
 """
 
+import asyncio
 import base64
 import logging
 import os
+import random
 from pathlib import Path
 
-from openai import OpenAI
+from openai import OpenAI, APIStatusError, APITimeoutError, APIConnectionError
 
 from .config import OPENAI_BASE_URL, OPENAI_API_KEY, IMAGE_MODEL, DATA_DIR
 
 logger = logging.getLogger(__name__)
 
 _client = None
+
 
 def _get_client():
     """Ленивая инициализация OpenAI клиента."""
@@ -24,75 +27,111 @@ def _get_client():
         _client = OpenAI(
             base_url=OPENAI_BASE_URL,
             api_key=OPENAI_API_KEY,
+            max_retries=4,
+            timeout=120.0,
         )
     return _client
 
-GENERATED_DIR = DATA_DIR / "generated"
-GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+
+def _is_retryable(e) -> bool:
+    if isinstance(e, (APITimeoutError, APIConnectionError)):
+        return True
+    if isinstance(e, APIStatusError):
+        return e.status_code in (429, 500, 502, 503, 529)
+    return False
 
 
 def _decode_image_response(data_item) -> bytes:
-    """Извлекаем байты картинки из ответа OpenAI (b64 или url)."""
     b64 = getattr(data_item, "b64_json", None)
     if b64:
         return base64.b64decode(b64)
-
     url = getattr(data_item, "url", None)
     if url:
         import urllib.request
-        with urllib.request.urlopen(url) as resp:
+        with urllib.request.urlopen(url, timeout=30) as resp:
             return resp.read()
-
     raise ValueError("Ответ image API не содержит b64_json или url")
 
 
 def regenerate_photo(image_path: str, prompt: str) -> str:
     """
-    Перегенерируем фото через image-edit API.
-    Возвращаем путь к новому файлу.
+    Перегенерируем фото через image-edit API с retry и offload.
     """
     if not image_path or not os.path.exists(image_path):
         raise FileNotFoundError(f"Файл изображения не найден: {image_path}")
 
-    with open(image_path, "rb") as f:
-        response = _get_client().images.edit(
-            model=IMAGE_MODEL,
-            image=f,
-            prompt=prompt,
-            n=1,
-            size="1024x1024",
-        )
+    import concurrent.futures
+    retries = 0
+    while True:
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(
+                    lambda: _get_client().images.edit(
+                        model=IMAGE_MODEL,
+                        image=open(image_path, "rb"),
+                        prompt=prompt,
+                        n=1,
+                        size="1024x1024",
+                    ),
+                )
+                response = future.result(timeout=180)
 
-    image_bytes = _decode_image_response(response.data[0])
+            image_bytes = _decode_image_response(response.data[0])
+            output_path = GENERATED_DIR / f"regenerated_{os.path.basename(image_path)}"
+            if output_path.suffix.lower() not in (".jpg", ".jpeg", ".png"):
+                output_path = output_path.with_suffix(".png")
+            with open(output_path, "wb") as f:
+                f.write(image_bytes)
+            logger.info(f"🖼 Фото переработано: {output_path}")
+            return str(output_path)
 
-    output_path = GENERATED_DIR / f"regenerated_{os.path.basename(image_path)}"
-    if output_path.suffix.lower() not in (".jpg", ".jpeg", ".png"):
-        output_path = output_path.with_suffix(".png")
-
-    with open(output_path, "wb") as f:
-        f.write(image_bytes)
-
-    logger.info(f"🖼 Фото переработано: {output_path}")
-    return str(output_path)
+        except (APIStatusError, APITimeoutError, APIConnectionError, concurrent.futures.TimeoutError) as e:
+            if not _is_retryable(e) or retries >= 4:
+                raise
+            retries += 1
+            wait = min(2 ** retries + random.random(), 30)
+            logger.warning(f"🔄 Photo regen retry #{retries}: {e}")
+            await asyncio.sleep(wait)
+        except Exception as e:
+            raise
 
 
 def generate_image(prompt: str, filename: str = "generated") -> str:
     """
     Генерируем новое изображение с нуля по промпту.
-    Возвращаем путь к файлу.
     """
-    response = _get_client().images.generate(
-        model=IMAGE_MODEL,
-        prompt=prompt,
-        n=1,
-        size="1024x1024",
-    )
+    import concurrent.futures
+    retries = 0
+    while True:
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(
+                    lambda: _get_client().images.generate(
+                        model=IMAGE_MODEL,
+                        prompt=prompt,
+                        n=1,
+                        size="1024x1024",
+                    ),
+                )
+                response = future.result(timeout=180)
 
-    image_bytes = _decode_image_response(response.data[0])
-    output_path = GENERATED_DIR / f"{filename}.png"
+            image_bytes = _decode_image_response(response.data[0])
+            output_path = GENERATED_DIR / f"{filename}.png"
+            with open(output_path, "wb") as f:
+                f.write(image_bytes)
+            logger.info(f"🖼 Изображение сгенерировано: {output_path}")
+            return str(output_path)
 
-    with open(output_path, "wb") as f:
-        f.write(image_bytes)
+        except (APIStatusError, APITimeoutError, APIConnectionError, concurrent.futures.TimeoutError) as e:
+            if not _is_retryable(e) or retries >= 4:
+                raise
+            retries += 1
+            wait = min(2 ** retries + random.random(), 30)
+            logger.warning(f"🔄 Image gen retry #{retries}: {e}")
+            await asyncio.sleep(wait)
+        except Exception as e:
+            raise
 
-    logger.info(f"🖼 Изображение сгенерировано: {output_path}")
-    return str(output_path)
+
+GENERATED_DIR = DATA_DIR / "generated"
+GENERATED_DIR.mkdir(parents=True, exist_ok=True)

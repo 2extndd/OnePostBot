@@ -3,6 +3,7 @@
 Читает последние сообщения из указанных каналов, скачивает фото.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
@@ -79,6 +80,7 @@ class TGParser:
         Возвращаем список словарей с photo_paths (список путей) и photo_path (первый, для совместимости).
         """
         channels = channels or PARSE_CHANNELS
+        since = datetime.now(timezone.utc) - timedelta(days=since_days or PARSE_DAYS)
         all_posts: List[Dict] = []
 
         for ch in channels:
@@ -98,6 +100,9 @@ class TGParser:
                     if not isinstance(msg, Message):
                         continue
                     if not (msg.text or msg.media):
+                        continue
+                    # Фильтруем по дате (H4 fix)
+                    if msg.date and msg.date < since:
                         continue
 
                     gid = msg.grouped_id or msg.id  # одиночные посты — по своему id
@@ -128,11 +133,12 @@ class TGParser:
                     if skip_processed and db.is_processed(channel_username, g["msg_id"]):
                         continue
 
-                    photo_paths = []
-                    for m in g["messages"]:
-                        p = await self._download_photo(m)
-                        if p:
-                            photo_paths.append(p)
+                    # H2: параллельное скачивание фото с ограничением并发
+                    async def _dl(m):
+                        return await self._download_photo(m)
+
+                    results = await asyncio.gather(*[_dl(m) for m in g["messages"]], return_exceptions=True)
+                    photo_paths = [p for p in results if isinstance(p, str)]
 
                     all_posts.append({
                         "channel": channel_name,

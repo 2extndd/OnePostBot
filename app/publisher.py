@@ -23,6 +23,18 @@ from .config import (
 logger = logging.getLogger(__name__)
 
 
+def _safe_caption(text: str, max_len: int = 1024) -> str:
+    """Обрезает текст до max_len, закрывая открытые HTML-теги."""
+    if len(text) <= max_len:
+        return text
+    text = text[:max_len]
+    # Закрываем открытые теги
+    for tag in ("<b>", "<strong>", "<i>", "<em>", "<a", "<a>", "<blockquote>", "<pre>", "<code>"):
+        if text.count(tag) % 2 != 0:
+            text += f"</{tag.lstrip('<>')}>"
+    return text
+
+
 async def post_via_bot(text: str, photo_path: str = None, chat_id: str = None, topic_id: int = None):
     """Публикация через бота (Telegram Bot API)."""
     import aiohttp
@@ -34,7 +46,7 @@ async def post_via_bot(text: str, photo_path: str = None, chat_id: str = None, t
     url = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
     # Подготовим общие параметры
-    base_params = {"chat_id": str(chat), "text": text}
+    base_params = {"chat_id": str(chat), "text": text, "parse_mode": "HTML"}
     if topic_id:
         base_params["message_thread_id"] = topic_id
 
@@ -43,7 +55,8 @@ async def post_via_bot(text: str, photo_path: str = None, chat_id: str = None, t
             with open(photo_path, "rb") as f:
                 form = aiohttp.FormData()
                 form.add_field("chat_id", str(chat))
-                form.add_field("caption", text[:1024])
+                form.add_field("caption", _safe_caption(text))
+                form.add_field("parse_mode", "HTML")
                 if topic_id:
                     form.add_field("message_thread_id", str(topic_id))
                 form.add_field("photo", f, filename=os.path.basename(photo_path))
@@ -51,10 +64,7 @@ async def post_via_bot(text: str, photo_path: str = None, chat_id: str = None, t
                     result = await resp.json()
     else:
         async with aiohttp.ClientSession() as session:
-            payload = {"chat_id": str(chat), "text": text}
-            if topic_id:
-                payload["message_thread_id"] = topic_id
-            async with session.post(f"{url}/sendMessage", json=payload) as resp:
+            async with session.post(f"{url}/sendMessage", json=base_params) as resp:
                 result = await resp.json()
 
     if not result.get("ok"):
@@ -83,15 +93,10 @@ async def post_via_telethon(text: str, photo_path: str = None):
 
 async def publish_post(text: str, photo_path: str = None, mode: str = "auto"):
     """
-    Публикуем пост.
-    mode: 'bot' | 'telethon' | 'auto'
+    Публикуем пост (НЕ добавляет задержку — она в publish_worker).
     """
     if mode == "auto":
         mode = "bot" if BOT_TOKEN else "telethon"
-
-    delay = random.randint(POST_DELAY_MIN, POST_DELAY_MAX)
-    logger.info(f"⏳ Публикация через {delay} мин...")
-    await asyncio.sleep(delay * 60)
 
     try:
         if mode == "bot":
