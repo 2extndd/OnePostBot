@@ -53,7 +53,7 @@ def _decode_image_response(data_item) -> bytes:
     raise ValueError("Ответ image API не содержит b64_json или url")
 
 
-def regenerate_photo(image_path: str, prompt: str) -> str:
+async def regenerate_photo(image_path: str, prompt: str) -> str:
     """
     Перегенерируем фото через image-edit API с retry и offload.
     """
@@ -96,7 +96,7 @@ def regenerate_photo(image_path: str, prompt: str) -> str:
             raise
 
 
-def generate_image(prompt: str, filename: str = "generated") -> str:
+async def generate_image(prompt: str, filename: str = "generated") -> str:
     """
     Генерируем новое изображение с нуля по промпту.
     """
