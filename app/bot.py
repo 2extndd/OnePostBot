@@ -48,7 +48,7 @@ from .parser import TGParser
 from .text_regen import regenerate_text, generate_caption_for_photo, rewrite_news, add_ad, translate_text
 from .image_regen import regenerate_photo
 from .publisher import post_via_bot
-from .scheduler import enqueue_post, get_pending_posts, get_approved_posts, approve_post, mark_published, mark_failed, get_post, update_post
+from .scheduler import enqueue_post, get_pending_posts, approve_post, mark_published, mark_failed, get_post, update_post
 from . import db
 
 logging.basicConfig(level=logging.INFO)
@@ -646,57 +646,29 @@ async def do_publish(message: Message):
         await send_error(message.chat.id, "📭 Очередь пуста. Используйте /parse для загрузки постов.")
         return
 
-    count = 0
+    published_count = 0
     for post in pending:
-        approve_post(post["id"])
-        count += 1
-
-    await send_with_topic(
-        message.chat.id,
-        f"✅ Добавлено {count} постов в очередь публикации.\n"
-        f"Публикация начнётся автоматически через {POST_DELAY_MIN}-{POST_DELAY_MAX} мин."
-    )
-
-
-async def publish_worker(chat_id: int):
-    """Фоновый воркер: публикует одобренные посты с задержкой.
-    Запускается при старте бота (bot.main)."""
-    logger.info("📤 Запущен фоновый воркер публикации")
-    while True:
         try:
-            # Восстанавливаем «зависшие» approved/failed посты после рестарта
-            stuck = get_pending_posts()
-            for p in stuck:
-                mark_published(p["id"])
-
-            approved = get_approved_posts()
-            if not approved:
-                await asyncio.sleep(30)
-                continue
-
-            post = approved[0]
-            await send_with_topic(chat_id, f"📤 Публикую #{post['id']}: {post['text'][:100]}...")
-            delay = random.randint(POST_DELAY_MIN, POST_DELAY_MAX)
-            await asyncio.sleep(delay * 60)
-
-            try:
-                for topic in TOPICS:
-                    await post_via_bot(
-                        post["text"],
-                        post.get("photo_path"),
-                        chat_id=str(topic["chat_id"]),
-                        topic_id=topic["topic_id"]
-                    )
-                mark_published(post["id"])
-                await send_with_topic(chat_id, f"✅ Пост #{post['id']} опубликован!")
-            except Exception as e:
-                logger.error(f"Publish error: {e}")
-                mark_failed(post["id"], str(e))
-                await send_with_topic(chat_id, f"❌ Ошибка поста #{post['id']}: {e}")
-
+            await send_with_topic(message.chat.id, f"📤 Публикую #{post['id']}...")
+            for topic in TOPICS:
+                await post_via_bot(
+                    post["text"],
+                    post.get("photo_path"),
+                    chat_id=str(topic["chat_id"]),
+                    topic_id=topic["topic_id"]
+                )
+            mark_published(post["id"])
+            await send_with_topic(message.chat.id, f"✅ Пост #{post['id']} опубликован!")
+            published_count += 1
         except Exception as e:
-            logger.error(f"Publish worker error: {e}")
-            await asyncio.sleep(60)
+            logger.error(f"Publish error: {e}")
+            mark_failed(post["id"], str(e))
+            await send_with_topic(message.chat.id, f"❌ Ошибка поста #{post['id']}: {e}")
+
+    if published_count:
+        await send_with_topic(message.chat.id, f"🎉 Опубликовано {published_count} постов.")
+    else:
+        await send_with_topic(message.chat.id, "⚠️ Публикации завершены с ошибками.")
 
 
 @dp.message(Command("publish"))
@@ -968,8 +940,6 @@ async def main():
     """Запуск бота."""
     logger.info("🚀 Запускаю TG Publisher бота...")
     db.init_db()
-    # Запускаем фоновый воркер публикации
-    asyncio.create_task(publish_worker(CHAT_ID))
     await dp.start_polling(bot)
 
 

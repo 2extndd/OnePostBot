@@ -80,7 +80,7 @@ async def _call_llm(system_blocks: list, user_text: str, max_tokens: int = 1500)
             if not _is_retryable(e) or retries >= 4:
                 raise
             retries += 1
-            wait = min(2 ** retries + random.random(), 30)
+            wait = min(2 ** retries, 6)  # короткий backoff: 2,4,6 сек
             logger.warning(f"🔄 LLM retry #{retries} after {e.__class__.__name__}: {e}")
             await asyncio.sleep(wait)
         except Exception as e:
