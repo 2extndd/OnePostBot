@@ -106,39 +106,39 @@ def _build_system_blocks(extra: str = "") -> list:
     ]
 
 
-def rewrite_news(news_text: str, custom_prompt: str = None) -> str:
+async def rewrite_news(news_text: str, custom_prompt: str = None) -> str:
     instruction = custom_prompt or db.get_setting("rewrite_prompt")
     user_text = f"{instruction}\n\n<source_post>\n{news_text}\n</source_post>"
-    result = _call_llm(_build_system_blocks(), user_text)
+    result = await _call_llm(_build_system_blocks(), user_text)
     logger.info(f"📝 Новость переписана ({len(result)} символов)")
     return result
 
 
-def add_ad(text: str) -> str:
+async def add_ad(text: str) -> str:
     instruction = db.get_setting("ad_prompt")
     user_text = f"{instruction}\n\n<post_to_keep>\n{text}\n</post_to_keep>"
-    result = _call_llm(_build_system_blocks(), user_text)
+    result = await _call_llm(_build_system_blocks(), user_text)
     logger.info(f"🎯 Реклама добавлена ({len(result)} символов)")
     return result
 
 
-def translate_text(news_text: str) -> str:
+async def translate_text(news_text: str) -> str:
     from .prompts import TRANSLATE_PROMPT
     system_blocks = [{"type": "text", "text": "Ты — профессиональный переводчик. Переводишь точно, без отсебятины."}]
     user_text = f"{TRANSLATE_PROMPT}\n\n<source_post>\n{news_text}\n</source_post>"
-    result = _call_llm(system_blocks, user_text)
+    result = await _call_llm(system_blocks, user_text)
     logger.info(f"🌐 Текст переведён ({len(result)} символов)")
     return result
 
 
 # ---------- Обратная совместимость ----------
 
-def regenerate_text(original_text: str, context: str = "") -> str:
+async def regenerate_text(original_text: str, context: str = "") -> str:
     if context and context.strip():
-        return rewrite_news(original_text, custom_prompt=context)
-    return rewrite_news(original_text)
+        return await rewrite_news(original_text, custom_prompt=context)
+    return await rewrite_news(original_text)
 
 
-def generate_caption_for_photo(photo_description: str, channel_context: str = "") -> str:
+async def generate_caption_for_photo(photo_description: str, channel_context: str = "") -> str:
     user_text = f"Напиши короткий привлекательный пост-подпись для фото.\nОписание фото: {photo_description}\n\nТолько пост, 1-2 абзаца, без объяснений."
-    return _call_llm(_build_system_blocks(), user_text, max_tokens=512)
+    return await _call_llm(_build_system_blocks(), user_text, max_tokens=512)
