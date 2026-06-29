@@ -1,2 +1,4 @@
 {"v":2,"cmd":"plan-milestone","params":{"milestoneId":"M001"},"ts":"2026-06-27T15:39:19.039Z","actor":"agent","hash":"e7646f64e62daa33","session_id":"b992e707-6b93-4dcd-be5a-1f319a2754f0"}
 {"v":2,"cmd":"plan-milestone","params":{"milestoneId":"M002"},"ts":"2026-06-27T17:35:52.812Z","actor":"agent","hash":"e0e3f50cb5178909","session_id":"b992e707-6b93-4dcd-be5a-1f319a2754f0"}
+{"v":2,"cmd":"complete-task","params":{"milestoneId":"M001","sliceId":"S01","taskId":"T01"},"ts":"2026-06-29T12:35:38.283Z","actor":"agent","actor_name":"agent","trigger_reason":"Task completed — full bot rewrite and deployment","hash":"5a804380eb33710e","session_id":"564d43ff-0ea6-46ac-bba5-56299a4b9825"}
+{"v":2,"cmd":"complete-slice","params":{"milestoneId":"M001","sliceId":"S01"},"ts":"2026-06-29T12:47:56.842Z","actor":"agent","actor_name":"agent","trigger_reason":"Slice completed","hash":"92302f4ab3d641a7","session_id":"564d43ff-0ea6-46ac-bba5-56299a4b9825"}

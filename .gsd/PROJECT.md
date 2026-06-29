@@ -1,68 +1,59 @@
-# OnePostBot — Project Overview
+# TG Publisher — Summary
 
-## What it is
+## Что сделано
 
-OnePostBot (внутреннее имя «TG Publisher») — система автоматического ведения Telegram-каналов. Парсит контент из исходных каналов, перерабатывает его через AI (рерайт, перевод, улучшение изображений) и публикует в целевой канал с ручным подтверждением оператора.
+### Баги исправлены (8+)
+1. `.env` на сервере — склеенные строки `DOCKER_CONFIG`/`TELEGRAM_API_ID` → разделены
+2. `EOFError` при `/parse` — Telethon пытался интерактивно вводить код в Docker
+3. aiogram 3.x — все `InlineKeyboardButton`/`KeyboardButton` переделаны на именованные аргументы
+4. `rewrite_` перехватывал `rewrite_custom_` → добавлен фильтр `not startswith("rewrite_custom_")`
+5. `photo_url` vs `photo_path` между parser и bot → унифицировано на `photo_path`
+6. `post_via_bot` — использовал `files=` из requests → переделан на `aiohttp.FormData()`
+7. `regenerate_photo` — возвращал невалидные данные → теперь возвращает путь к файлу
+8. Файловая очередь → SQLite с транзакциями и индексами
+9. Telegram-токен устарел → заменён на новый
 
-Предназначен для ведения контент-канала, связанного с проектом **OneProvider.dev** (платформа продажи LLM API-ключей).
+### Новые возможности
+- **Управление каналами:** `/channels`, `/addchannel @канал`, `/delchannel @канал`
+- **Многотопиковость:** поддержка двух топиков (CHAT_ID/TOPIC_ID + CHAT_ID_2/TOPIC_ID_2)
+- **Посты в БД:** все посты хранятся в `parsed_posts` таблице (фиксит lost-update)
+- **Ленивая инициализация API-клиентов** — не падает при отсутствии ключей
+- **Альбомы фото:** multi-photo posts через `send_media_group`
 
-## Core surfaces
+### Архитектурные изменения
+- Новый модуль `db.py` — SQLite слой (channels, parsed_posts, queue, processed_messages, settings)
+- `docker-compose.yml` использует `env_file` — секреты не в git
+- `.env` добавлен в `.gitignore`
+- Callback-хендлеры теперь берут посты из БД по id
 
-- **Telegram Bot** (`@AutoOneProviderbot`) — основной интерфейс управления через команды и inline-кнопки
-- **Telethon parser** — пользовательский аккаунт читает исходные каналы (требует авторизации сессии)
-- **AI layer** — Anthropic (Claude) для текста, OpenAI-совместимый (cc-vibe, GPT Image) для изображений
+### Деплой
+- Сервер: 138.124.50.27
+- Путь: /etc/dokploy/compose/onepostbot-stack-7gdtph/code/
+- Контейнер: onepostbot-stack-7gdtph-tg-publisher-1
+- Бот: @AutoOneProviderbot (id=8732968162)
+- Токен: 8732968162:AAHedj6mb2jUMlogz5HLtKpN2aDqCEZdDEM
 
-## Tech stack
+### Команды бота
+- `/parse N` — парсинг последних N постов
+- `/parse @channel N` — парсинг конкретного канала
+- `/channels` — список каналов
+- `/addchannel @канал` — добавить канал
+- `/delchannel @канал` — удалить канал
+- `/publish` — опубликовать одобренные посты
+- `/watch` — мониторинг новых постов
+- `/stop` — остановить мониторинг
+- `/config` — текущие настройки
+- `/help` — справка
 
-- **Язык:** Python 3.13
-- **Bot framework:** aiogram 3.x (Bot API)
-- **Парсинг:** Telethon 1.44+ (MTProto / user session)
-- **AI:** anthropic SDK (через OneProvider proxy), openai SDK (через cc-vibe)
-- **Хранилище:** SQLite (`data/processed.db`) — dedup + очередь публикаций
-- **Деплой:** Docker Compose через Dokploy на VPS
+### Кнопки под каждым постом
+- ⬅️ Назад / ➡️ Далее (навигация)
+- 📝 Рерайт (рерайт + перевод на английский)
+- ✍️ Рерайт промт (своим промптом)
+- 🌐 Перевести
+- 🖼 Перегенерировать фото
+- ✅ Опубликовать
 
-## Deployment
-
-- **Сервер:** `138.124.50.27` (root)
-- **Путь:** `/etc/dokploy/compose/onepostbot-stack-7gdtph/code/`
-- **Контейнер:** `onepostbot-stack-7gdtph-tg-publisher-1`
-- **Запуск:** `python -m app.main bot`
-- **Ресурсы:** 512MB RAM, 1 CPU (лимит)
-
-## Module map
-
-| Модуль | Ответственность |
-|--------|-----------------|
-| `app/bot.py` | Команды бота, callback-хендлеры, watch-loop |
-| `app/parser.py` | Парсинг каналов через Telethon, скачивание медиа |
-| `app/text_regen.py` | Рерайт/перевод текста (Claude) |
-| `app/image_regen.py` | Улучшение/генерация изображений (GPT Image) |
-| `app/publisher.py` | Публикация в целевой канал (Bot API / Telethon) |
-| `app/scheduler.py` | Очередь публикаций (обёртка над db.py) |
-| `app/db.py` | SQLite: dedup + очередь |
-| `app/config.py` | Конфигурация из .env |
-| `app/notifier.py` | Уведомления в тему топика |
-
-## Post lifecycle
-
-```
-parsed → pending → approved → published
-                 ↘ failed
-```
-
-## Current state (2026-06-27)
-
-**Исправлено в этой сессии:**
-- Сломанный `.env` на сервере (склеенные строки `DOCKER_CONFIG`/`TELEGRAM_API_ID`)
-- `EOFError` при `/parse` — Telethon пытался интерактивно вводить код в Docker без stdin
-- aiogram 3.x несовместимость — позиционные аргументы в `InlineKeyboardButton`/`KeyboardButton`
-- Перехват `rewrite_custom_` хендлером `rewrite_`
-- Несоответствие `photo_url` vs `photo_path` между parser и bot
-- Файловая очередь заменена на SQLite с корректным жизненным циклом
-- `post_via_bot` использовал requests-синтаксис в aiohttp (падал на отправке фото)
-- `regenerate_photo` возвращал невалидные данные вместо пути к файлу
-
-**Открытые вопросы:**
-- Telethon-сессия не авторизована (блокирует парсинг) — требуется код подтверждения
-- `TARGET_CHANNEL` пустой — целевой канал ещё не выбран
-- Режим работы: ручное подтверждение перед публикацией (выбрано оператором)
+## Открытые вопросы
+- API ключи для LLM (ANTHROPIC_API_KEY, OPENAI_API_KEY) — placeholder'ы
+- TARGET_CHANNEL установлен на @onecodebase (-1003944526531)
+- Dokploy может перезаписывать .env при деплое — нужно настроить через UI или env_file mount

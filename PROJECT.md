@@ -2,7 +2,7 @@
 
 ## Milestone Sequence
 
-- [ ] M001: Fix bot deployment — fix .env, Telethon auth, code bugs
+- [x] M001: Fix bot deployment — fix .env, Telethon auth, code bugs, multi-topic support
 - [ ] M002: Full OneProvider integration — connect to OneProvider API, auto-publish blog/news content
 - [ ] M003: Automation features — cron scheduling, approval workflow, analytics
 

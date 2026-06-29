@@ -1,7 +1,7 @@
 # GSD State
 
 **Active Milestone:** M001: Fix bot deployment
-**Active Slice:** S01: Fix .env and server deployment
+**Active Slice:** S02: Rewrite bot.py callbacks
 **Phase:** planning
 **Requirements Status:** 0 active · 0 validated · 0 deferred · 0 out of scope
 
@@ -16,4 +16,4 @@
 - None
 
 ## Next Action
-Slice S01 has no DB tasks. Plan slice tasks before execution.
+Slice S02 has no DB tasks. Plan slice tasks before execution.

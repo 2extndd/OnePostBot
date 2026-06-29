@@ -4,7 +4,7 @@
 
 ## Slices
 
-- [ ] **S01: Fix .env and server deployment** `risk:low` `depends:[]`
+- [x] **S01: S01** `risk:low` `depends:[]`
   > After this: Контейнер запускается без ошибок
 
 - [ ] **S02: Rewrite bot.py callbacks** `risk:medium` `depends:[]`
