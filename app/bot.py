@@ -501,13 +501,16 @@ async def show_card(message: Message, state: FSMContext, index: int = 0, edit: b
                 return
             except Exception as e:
                 logger.warning(f"edit_text failed: {e}")
-        # Тип изменился (текст↔фото) — удаляем старую, шлём новую
+        # Тип изменился (текст↔фото) или force_resend — удаляем старую, шлём новую
         try:
+            logger.info(f"🗑 Удаляю старую карточку {card_id}")
             await bot.delete_message(chat_id=chat_id, message_id=card_id)
-        except Exception:
-            pass
+            logger.info(f"🗑 Старая карточка удалена")
+        except Exception as e:
+            logger.warning(f"delete failed: {e}")
 
     # Отправляем новую карточку
+    logger.info(f"📤 Отправляю новую карточку: is_photo={is_photo}, index={index}")
     if is_photo:
         sent = await bot.send_photo(
             chat_id=chat_id, photo=_photo(photo_paths[0]), caption=caption,
@@ -518,6 +521,7 @@ async def show_card(message: Message, state: FSMContext, index: int = 0, edit: b
             chat_id=chat_id, text=full_body if full_body else channel_name,
             reply_markup=kb, parse_mode="HTML", message_thread_id=_current_thread.get(),
         )
+    logger.info(f"✅ Карточка отправлена: message_id={sent.message_id}")
     await state.update_data(card_message_id=sent.message_id, card_is_photo=is_photo, current_index=index)
 
 
@@ -825,8 +829,11 @@ async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMConte
         try:
             image_prompt = db.get_setting("image_prompt")
             new_photo = await regenerate_photo(post["photo_path"], image_prompt)
+            logger.info(f"🖼 Фото переработано: {new_photo}")
             db.update_parsed_post(post["id"], post.get("edited_text") or post["text"], photo_path=new_photo)
+            logger.info(f"🖼 Обновляю карточку с force_resend=True, idx={idx}")
             await show_card(callback.message, state, index=idx, edit=True, force_resend=True)
+            logger.info(f"🖼 Карточка обновлена")
         except Exception as e:
             logger.error(f"Regen photo error: {e}")
             await show_card(callback.message, state, index=idx, edit=True)
