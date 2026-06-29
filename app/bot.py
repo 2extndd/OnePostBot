@@ -433,14 +433,25 @@ async def show_card(message: Message, state: FSMContext, index: int = 0, edit: b
         body = post.get("edited_text") or post["text"]
     channel_username = post.get("channel_username") or post.get("channel_title") or "unknown"
     date_str = post.get("date", "")
+    # Форматируем дату красиво (ISO → DD.MM.YYYY HH:MM)
+    date_fmt = date_str
+    try:
+        from datetime import datetime as _dt
+        date_fmt = _dt.fromisoformat(date_str).strftime("%d.%m.%Y %H:%M")
+    except (ValueError, TypeError):
+        pass
     kb = _post_kb(index, total)
 
     photo_paths = post.get("photo_paths") or ([post["photo_path"]] if post.get("photo_path") else [])
     is_photo = bool(photo_paths)
 
-    # Технический заголовок с гиперссылкой на канал и датой
-    channel_link = f"[{channel_username}](https://t.me/{channel_username.lstrip('@')})" if channel_username.lstrip('@') else channel_username
-    header = f"📰 {channel_link}\n📅 {date_str}"
+    # Технический заголовок: HTML-гиперссылка на канал + дата
+    uname = channel_username.lstrip("@")
+    if uname and uname != "unknown":
+        channel_link = f'<a href="https://t.me/{uname}">@{uname}</a>'
+    else:
+        channel_link = channel_username
+    header = f"📰 {channel_link}  •  🕐 {date_fmt}"
     full_body = f"{header}\n\n{body}" if body else header
 
     caption = full_body
