@@ -1,109 +1,101 @@
-# OnePostBot — Telegram Auto-Publisher
-
-Система автоматической публикации контента для Telegram-каналов. Автоматически парсит посты из исходных каналов, позволяет рерайтить/переводить/улучшать контент через AI, и публиковать в целевой канал с ручным подтверждением.
+# TG Publisher (OnePostBot) — Документация
 
 ## Архитектура
 
 ```
-┌──────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│ Source TG     │    │  OnePostBot     │    │  Target TG      │
-│ Channels      │───▶│  (Telegram Bot) │───▶│  Channel        │
-│ (@claudedev)  │    │                 │    │  (TBD)          │
-└──────────────┘    │                 │    └─────────────────┘
-                    │  ┌───────────┐  │
-                    │  │ AI Layer  │  │
-                    │  │ Anthropic │  │
-                    │  │ OpenAI    │  │
-                    │  └───────────┘  │
-                    └─────────────────┘
+Source TG Channels  →  Telegram Parser (Telethon)  →  AI Layer  →  Publish Queue  →  Target Channels
+(@claudedev)              (downloads photos)            (Claude + GPT)  (SQLite)            (2 topics)
 ```
 
 ## Модули
 
-- **`bot.py`** — Telegram Bot API (aiogram 3.x): команды `/parse`, `/publish`, `/watch`, `/stop`, `/config`, `/help` + inline-кнопки для каждого поста
-- **`parser.py`** — парсинг Telegram-каналов через Telethon: скачивает посты с медиа, сохраняет фото в `data/media/`
-- **`text_regen.py`** — рерайт/перевод текста через Anthropic (Claude)
-- **`image_regen.py`** — улучшение/генерация изображений через OpenAI (GPT Image)
-- **`publisher.py`** — публикация в целевой канал через Bot API
-- **`scheduler.py`** — очередь постов (SQLite: pending → approved → published)
-- **`db.py`** — SQLite-слой: dedup обработанных сообщений + очередь публикаций
-- **`config.py`** — конфигурация из `.env`
-- **`notifier.py`** — отправка уведомлений в тему (aiohttp)
+| Модуль | Назначение |
+|--------|-----------|
+| `app/bot.py` | Telegram Bot API (aiogram 3.x): команды + callback-хендлеры |
+| `app/parser.py` | Парсинг каналов через Telethon, скачивание медиа |
+| `app/text_regen.py` | Рерайт/перевод текста (Anthropic/Claude) |
+| `app/image_regen.py` | Улучшение/генерация изображений (OpenAI/GPT Image) |
+| `app/publisher.py` | Публикация в целевой канал (Bot API) |
+| `app/scheduler.py` | Очередь публикаций (обёртка над db.py) |
+| `app/db.py` | SQLite: dedup + очередь + каналы + посты + настройки |
+| `app/config.py` | Конфигурация из .env |
 
 ## Команды бота
 
 | Команда | Описание |
 |---------|----------|
-| `/parse N` | Показать последние N постов |
-| `/parse @channel N` | Парсить конкретный канал |
+| `/parse N` | Последние N постов |
+| `/parse @channel N` | Конкретный канал |
+| `/channels` | Список каналов |
+| `/addchannel @канал` | Добавить канал |
+| `/delchannel @канал` | Удалить канал |
 | `/publish` | Опубликовать одобренные посты |
-| `/watch` | Включить мониторинг новых постов |
+| `/watch` | Мониторинг новых постов |
 | `/stop` | Остановить мониторинг |
-| `/config` | Текущие настройки |
+| `/config` | Настройки |
 | `/help` | Справка |
+
+## Кнопки под каждым постом
+
+- **📝 Рерайт** — рерайт + перевод на английский (LLM)
+- **✍️ Рерайт промт** — рерайт с вашим промптом
+- **🌐 Перевести** — перевод на английский
+- **🖼 Перегенерировать фото** — улучшение изображения (GPT Image)
+- **✅ Опубликовать** — в очередь публикаций
 
 ## Жизненный цикл поста
 
 ```
 спарсен → pending → approved → published
          ↓          ↓
-      failed    published
+      failed    опубликован
 ```
-
-Каждый пост хранится в SQLite с метаданными: текст, фото, источник, статус, время.
 
 ## Деплой
 
-**Сервер:** `138.124.50.27` (root)
-**Путь проекта:** `/etc/dokploy/compose/onepostbot-stack-7gdtph/code/`
-**Имя контейнера:** `onepostbot-stack-7gdtph-tg-publisher-1`
+- **Сервер:** 138.124.50.27 (root)
+- **Путь:** `/etc/dokploy/compose/onepostbot-stack-7gdtph/code/`
+- **Контейнер:** `onepostbot-stack-7gdtph-tg-publisher-1`
+- **Бот:** @AutoOneProviderbot (id=8732968162)
+- **Запуск:** `python -m app.main bot`
+- **Логи:** `docker logs onepostbot-stack-7gdtph-tg-publisher-1`
 
-### Установка
+### Топики (2)
 
-```bash
-cd /etc/dokploy/compose/onepostbot-stack-7gdtph/code
-# .env уже настроен (проверить после авторизации)
-docker compose up -d --build
-```
+1. **Топик 1:** `CHAT_ID=-1003906263366`, `TOPIC_ID=425`
+2. **Топик 2:** `CHAT_ID=-1003965270090`, `TOPIC_ID=2084`
 
-### Логи
+Публикация идёт во **все** топики одновременно.
 
-```bash
-docker logs -f onepostbot-stack-7gdtph-tg-publisher-1
-```
+## Конфигурация
 
-## Конфигурация (.env)
+Все ключи встроены в **Dockerfile ENV** — Dokploy не перезапишет их при деплое.
 
 | Переменная | Описание |
 |------------|----------|
 | `BOT_TOKEN` | Токен бота от @BotFather |
-| `TELEGRAM_API_ID` | API ID для Telethon (парсинг) |
+| `TELEGRAM_API_ID` | API ID для Telethon |
 | `TELEGRAM_API_HASH` | API Hash для Telethon |
-| `TELEPHONE` | Номер телефона для авторизации Telethon |
-| `PARSE_CHANNELS` | Каналы для парсинга (через запятую) |
+| `TELEPHONE` | Номер для авторизации Telethon |
+| `ANTHROPIC_API_KEY` | Ключ для рерайта (Claude) |
+| `ANTHROPIC_BASE_URL` | Прокси OneProvider |
+| `LLM_MODEL` | Модель Claude |
+| `OPENAI_API_KEY` | Ключ для фото (GPT Image) |
+| `OPENAI_BASE_URL` | Прокси cc-vibe |
+| `IMAGE_MODEL` | Модель генерации фото |
 | `TARGET_CHANNEL` | Целевой канал для публикации |
-| `ANTHROPIC_API_KEY` | Ключ для рерайта текста |
-| `OPENAI_API_KEY` | Ключ для генерации фото |
+| `DATA_DIR` | Папка данных |
 
-## Данные
+## SQLite структура
 
-- `data/queue/` — очередь постов (JSON файлы, legacy)
-- `data/media/` — скачанные медиа
-- `data/tg_session.session` — Telethon-сессия
-- `data/processed.db` — SQLite (dedup + очередь)
+- `channels` — список каналов (@username)
+- `parsed_posts` — все спарсенные посты (текст, фото, edited_text, showing_original)
+- `queue` — очередь публикаций (pending/approved/published/failed)
+- `processed_messages` — dedup (чтобы не парсить дважды)
+- `settings` — настройки (image_prompt и т.д.)
 
-## Известные ограничения
+## Безопасность
 
-1. **Telethon авторизация** — сессия должна быть авторизована заранее (через `_auth.py` или скрипт авторизации). Без этого `/parse` выдаёт ошибку.
-2. **TARGET_CHANNEL** — сейчас пустой, нужно указать перед публикацией.
-3. **Watch mode** — уведомления приходят в тот же чат, откуда отправлена команда `/watch`. Просмотр постов в watch-loop не поддерживается.
-4. **Один поток парсинга** — парсинг синхронный, блокирующий другие операции.
-5. **Нет rate-limit** между публикациями — зависит от настроек `POST_DELAY_MIN/MAX`.
-
-## Будущее развитие
-
-- Интеграция с OneProvider.dev (контент из блога/новостей)
-- Автопубликация без ручного подтверждения (через approve-кнопку)
-- Мультиязычность (EN/RU)
-- Статистика просмотров/кликов
-- Планировщик публикаций (cron-style)
+- `.env` в `.gitignore` — не попадает в git
+- Секреты в `Dockerfile ENV` — Dokploy не перезапишет при деплое
+- `.dockerignore` — исключает `.env` из образа

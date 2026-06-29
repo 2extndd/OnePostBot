@@ -1,7 +1,7 @@
 # Codebase Map
 
-Generated: 2026-06-29T11:46:10Z | Files: 23 | Described: 0/23
-<!-- gsd:codebase-meta {"generatedAt":"2026-06-29T11:46:10Z","fingerprint":"e089588b3da6081d63a559258ac732a236f231ef","fileCount":23,"truncated":false} -->
+Generated: 2026-06-29T14:47:38Z | Files: 24 | Described: 0/24
+<!-- gsd:codebase-meta {"generatedAt":"2026-06-29T14:47:38Z","fingerprint":"250bec641ee1b1c9d4be10cd33d0c8120a7d397c","fileCount":24,"truncated":false} -->
 
 ### (root)/
 - `_auth.py`
@@ -13,6 +13,7 @@ Generated: 2026-06-29T11:46:10Z | Files: 23 | Described: 0/23
 - `PROJECT.md`
 - `README.md`
 - `requirements.txt`
+- `SUMMARY.md`
 
 ### app/
 - `app/__init__.py`
