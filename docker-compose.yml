@@ -4,8 +4,6 @@ services:
   tg-publisher:
     build: .
     restart: unless-stopped
-    env_file:
-      - .env
     volumes:
       - ./data:/app/data
     networks:
