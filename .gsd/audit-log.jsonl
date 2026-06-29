@@ -1,2 +1,3 @@
 {"ts":"2026-06-27T15:31:36.457Z","severity":"error","component":"tool","message":"gsd_summary_save: PROJECT.md saved to PROJECT.md but parsed zero milestones — registration produced no DB rows","context":{"tool":"gsd_summary_save"}}
 {"ts":"2026-06-29T12:40:37.411Z","severity":"error","component":"tool","message":"gsd_summary_save: PROJECT.md saved to PROJECT.md but parsed zero milestones — registration produced no DB rows","context":{"tool":"gsd_summary_save"}}
+{"ts":"2026-06-29T12:53:55.595Z","severity":"error","component":"tool","message":"gsd_summary_save: PROJECT.md saved to PROJECT.md but parsed zero milestones — registration produced no DB rows","context":{"tool":"gsd_summary_save"}}
