@@ -411,7 +411,7 @@ async def _total(state) -> int:
     return len(data.get("post_ids", []))
 
 
-async def show_card(message: Message, state: FSMContext, index: int = 0, edit: bool = False):
+async def show_card(message: Message, state: FSMContext, index: int = 0, edit: bool = False, force_resend: bool = False):
     """
     Показать карточку поста (single-message card view).
     edit=False → отправить новую карточку, сохранить card_message_id/card_is_photo
@@ -464,7 +464,7 @@ async def show_card(message: Message, state: FSMContext, index: int = 0, edit: b
     card_is_photo = data.get("card_is_photo", False)
     chat_id = message.chat.id
 
-    if edit and card_id is not None:
+    if edit and card_id is not None and not force_resend:
         # Если тип совпадает — редактируем на месте
         if is_photo and card_is_photo:
             try:
@@ -818,7 +818,7 @@ async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMConte
             image_prompt = db.get_setting("image_prompt")
             new_photo = await regenerate_photo(post["photo_path"], image_prompt)
             db.update_parsed_post(post["id"], post.get("edited_text") or post["text"], photo_path=new_photo)
-            await show_card(callback.message, state, index=idx, edit=True)
+            await show_card(callback.message, state, index=idx, edit=True, force_resend=True)
         except Exception as e:
             logger.error(f"Regen photo error: {e}")
             await show_card(callback.message, state, index=idx, edit=True)
