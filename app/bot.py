@@ -398,9 +398,6 @@ def _post_kb(index: int, total: int = 1) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="✅ Опубликовать", callback_data="act_publish"),
             ],
-            [
-                InlineKeyboardButton(text="➕ Расширить парсинг", callback_data="expand_more"),
-            ],
         ],
     )
 
