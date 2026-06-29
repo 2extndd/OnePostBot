@@ -431,12 +431,19 @@ async def show_card(message: Message, state: FSMContext, index: int = 0, edit: b
         body = post["text"]
     else:
         body = post.get("edited_text") or post["text"]
-    channel_name = post.get("channel_title") or post.get("channel_username") or "unknown"
+    channel_username = post.get("channel_username") or post.get("channel_title") or "unknown"
+    date_str = post.get("date", "")
     kb = _post_kb(index, total)
 
     photo_paths = post.get("photo_paths") or ([post["photo_path"]] if post.get("photo_path") else [])
     is_photo = bool(photo_paths)
-    caption = _cap(body, 1024) if body else channel_name
+
+    # Технический заголовок с гиперссылкой на канал и датой
+    channel_link = f"[{channel_username}](https://t.me/{channel_username.lstrip('@')})" if channel_username.lstrip('@') else channel_username
+    header = f"📰 {channel_link}\n📅 {date_str}"
+    full_body = f"{header}\n\n{body}" if body else header
+
+    caption = full_body
 
     card_id = data.get("card_message_id")
     card_is_photo = data.get("card_is_photo", False)
@@ -465,7 +472,7 @@ async def show_card(message: Message, state: FSMContext, index: int = 0, edit: b
             try:
                 await bot.edit_message_text(
                     chat_id=chat_id, message_id=card_id,
-                    text=_cap(body, 4096) if body else channel_name,
+                    text=full_body if full_body else channel_name,
                     parse_mode="HTML", reply_markup=kb,
                 )
                 return
@@ -485,7 +492,7 @@ async def show_card(message: Message, state: FSMContext, index: int = 0, edit: b
         )
     else:
         sent = await bot.send_message(
-            chat_id=chat_id, text=_cap(body, 4096) if body else channel_name,
+            chat_id=chat_id, text=full_body if full_body else channel_name,
             reply_markup=kb, parse_mode="HTML", message_thread_id=_current_thread.get(),
         )
     await state.update_data(card_message_id=sent.message_id, card_is_photo=is_photo, current_index=index)
