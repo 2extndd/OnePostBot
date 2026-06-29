@@ -6,3 +6,4 @@ aiosqlite
 pyyaml
 python-dotenv
 aiohttp
+Pillow>=10.0
