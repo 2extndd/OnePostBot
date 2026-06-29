@@ -4,31 +4,10 @@ services:
   tg-publisher:
     build: .
     restart: unless-stopped
-    environment:
-      BOT_TOKEN: "8732968162:AAHedj6mb2jUMlogz5HLtKpN2aDqCEZdDEM"
-      TELEGRAM_API_ID: "36012732"
-      TELEGRAM_API_HASH: "f71d40d01f98db40be8e8faa743fda13"
-      TELEPHONE: "+4915143382445"
-      TELETHON_STRING_SESSION: "1ApWapzMBu5yivvem2Txs7aaiecU6pXyteIqgQupxUanqh2djfUgtxxM3PYsjLwj2lVr1g1Ko_yyrOGK1H9o70JahiBcOW9sMXTQm2nw1notGxslFubvhiZmrblxzDIMrvzkdVbkAnOUK1POu_Y4xMcGhEJshtIjorfK_WwWELjSZjoqqzdQUgigqgIl3Vney2YhxkjcOXqNzXTwwo0Ihpz9xr6jWxRvMZzPbZ6xBnN00mCHWKap4ZhZkPRVS3rGImjwyaweY7ijAx22Q9zZLyeI9avRcJeUJgA3g2w1KJUcuBnPZVHKwSrW8btKQa7cM-V9zq1lCbYoYj8xnr-NeH5_eGt0ufts="
-      TOPIC_ID: "425"
-      CHAT_ID: "-1003906263366"
-      CHAT_ID_2: "-1003965270090"
-      TOPIC_ID_2: "2084"
-      ANTHROPIC_API_KEY: "sk-45740ff9e1a81d876a32b33b947d3eefc79915ee2bd76b60503a475f2fc91dd2"
-      OPENAI_API_KEY: "sk-217faf886033c98bcc725e88efcea0797e441d5d61e07bc443db4607eb503ad9"
-      OPENAI_BASE_URL: "https://cc-vibe.com/v1"
-      ANTHROPIC_BASE_URL: "https://api.oneprovider.dev"
-      LLM_MODEL: "claude-opus-4-8"
-      LLM_THINKING_BUDGET: "8000"
-      IMAGE_MODEL: "gpt-image-2"
-      PARSE_CHANNELS: ""
-      PARSE_DAYS: "1"
-      POLL_INTERVAL: "300"
-      POST_DELAY_MIN: "10"
-      POST_DELAY_MAX: "30"
-      DATA_DIR: "/app/data"
+    env_file:
+      - .env
     volumes:
-      - onepostbot_data:/app/data
+      - ./data:/app/data
     networks:
       - internal
     deploy:
@@ -36,9 +15,6 @@ services:
         limits:
           memory: 512M
           cpus: "1.0"
-
-volumes:
-  onepostbot_data:
 
 networks:
   internal:

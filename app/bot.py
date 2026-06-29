@@ -257,7 +257,24 @@ async def do_parse(message: Message, state: FSMContext, count: int = 10, channel
             await send_error(message.chat.id, "Нет постов в каналах.")
             return
 
-        await state.update_data(posts=posts, channel=channel)
+        # Сохраняем посты в БД (фиксит lost-update)
+        post_ids = []
+        for p in posts:
+            photo_paths = p.get("photo_paths") or ([p.get("photo_path")] if p.get("photo_path") else None)
+            pid = db.save_parsed_post(
+                text=p["text"],
+                photo_path=p.get("photo_path"),
+                photo_paths=photo_paths,
+                source_channel=p.get("channel", ""),
+                msg_id=p["msg_id"],
+                date=p.get("date", ""),
+                channel_title=p.get("channel", ""),
+                channel_username=p.get("channel_username", ""),
+            )
+            post_ids.append(pid)
+
+        # Сохраняем id в состоянии (маленький хвост)
+        await state.update_data(post_ids=post_ids)
         await send_with_topic(message.chat.id, f"📥 Найдено {len(posts)} постов из {len(channels)} каналов.")
         # Отправляем ВСЕ посты сразу, каждый со своими кнопками (без листалки)
         for i in range(len(posts)):
@@ -475,6 +492,15 @@ async def show_post(parser: TGParser, posts: List[Dict], message: Message, state
 
 # ---------- callbacks ----------
 
+async def _get_post_from_db(state, index: int):
+    """Получить пост из БД по индексу в списке post_ids."""
+    data = await state.get_data()
+    post_ids = data.get("post_ids", [])
+    if index < 0 or index >= len(post_ids):
+        return None
+    pid = post_ids[index]
+    return db.get_parsed_post(pid)
+
 @dp.callback_query(lambda c: c.data == "noop")
 async def handle_noop(callback: types.CallbackQuery):
     await callback.answer()
@@ -486,9 +512,8 @@ async def handle_rewrite(callback: types.CallbackQuery, state: FSMContext):
     if index is None:
         await callback.answer("❌ Невалидный запрос")
         return
-    state_data = await state.get_data()
-    posts = state_data.get("posts", [])
-    if index >= len(posts):
+    post = await _get_post_from_db(state, index)
+    if not post:
         await callback.answer("❌ Пост не найден")
         return
 
@@ -501,16 +526,13 @@ async def handle_rewrite(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("📝 Рерайчу...")
         await _set_status(callback, "📝 Рерайчу... LLM думает")
         try:
-            post = posts[index]
             new_text = await rewrite_news(post["text"])
-            posts[index]["edited_text"] = new_text
-            posts[index]["showing_original"] = False
-            await state.update_data(posts=posts)
+            db.update_parsed_post(post["id"], new_text, photo_path=post.get("photo_path"))
             await _update_post_message(callback, index, new_text)
         except Exception as e:
             logger.error(f"Rewrite error: {e}")
-            await _update_post_message(callback, index, posts[index].get("edited_text") or posts[index]["text"])
-            await callback.answer(f"❌ Ошибка рерайта", show_alert=True)
+            await _update_post_message(callback, index, post["text"])
+            await callback.answer("❌ Ошибка рерайта", show_alert=True)
 
 
 @dp.callback_query(lambda c: c.data.startswith("rewrite_custom_"))
@@ -560,9 +582,8 @@ async def handle_translate(callback: types.CallbackQuery, state: FSMContext):
     if index is None:
         await callback.answer("❌ Невалидный запрос")
         return
-    state_data = await state.get_data()
-    posts = state_data.get("posts", [])
-    if index >= len(posts):
+    post = await _get_post_from_db(state, index)
+    if not post:
         await callback.answer("❌ Пост не найден")
         return
 
@@ -575,16 +596,13 @@ async def handle_translate(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("🌐 Перевожу...")
         await _set_status(callback, "🌐 Перевожу... LLM думает")
         try:
-            post = posts[index]
             base_text = post["text"] if post.get("showing_original") else (post.get("edited_text") or post["text"])
             translated = await translate_text(base_text)
-            posts[index]["edited_text"] = translated
-            posts[index]["showing_original"] = False
-            await state.update_data(posts=posts)
+            db.update_parsed_post(post["id"], translated, photo_path=post.get("photo_path"))
             await _update_post_message(callback, index, translated)
         except Exception as e:
             logger.error(f"Translate error: {e}")
-            await _update_post_message(callback, index, posts[index].get("edited_text") or posts[index]["text"])
+            await _update_post_message(callback, index, post.get("edited_text") or post["text"])
             await callback.answer("❌ Ошибка перевода", show_alert=True)
 
 
@@ -595,9 +613,8 @@ async def handle_ad(callback: types.CallbackQuery, state: FSMContext):
     if index is None:
         await callback.answer("❌ Невалидный запрос")
         return
-    state_data = await state.get_data()
-    posts = state_data.get("posts", [])
-    if index >= len(posts):
+    post = await _get_post_from_db(state, index)
+    if not post:
         await callback.answer("❌ Пост не найден")
         return
 
@@ -610,36 +627,33 @@ async def handle_ad(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("🎯 Добавляю рекламу...")
         await _set_status(callback, "🎯 Интегрирую рекламу... LLM думает")
         try:
-            post = posts[index]
             base_text = post["text"] if post.get("showing_original") else (post.get("edited_text") or post["text"])
             new_text = await add_ad(base_text)
-            posts[index]["edited_text"] = new_text
-            posts[index]["showing_original"] = False
-            await state.update_data(posts=posts)
+            db.update_parsed_post(post["id"], new_text, photo_path=post.get("photo_path"))
             await _update_post_message(callback, index, new_text)
         except Exception as e:
             logger.error(f"Ad error: {e}")
-            await _update_post_message(callback, index, posts[index].get("edited_text") or posts[index]["text"])
+            await _update_post_message(callback, index, post.get("edited_text") or post["text"])
             await callback.answer("❌ Ошибка рекламы", show_alert=True)
 
 
 @dp.callback_query(lambda c: c.data.startswith("orig_"))
 async def handle_original(callback: types.CallbackQuery, state: FSMContext):
     """Свитч между оригиналом и последней отредактированной версией."""
-    index = int(callback.data.split("_")[-1])
-    state_data = await state.get_data()
-    posts = state_data.get("posts", [])
-    if index >= len(posts):
+    index = _parse_index(callback)
+    if index is None:
+        await callback.answer("❌ Невалидный запрос")
+        return
+    post = await _get_post_from_db(state, index)
+    if not post:
         await callback.answer("❌ Пост не найден")
         return
 
-    post = posts[index]
     edited = post.get("edited_text")
     if not edited:
         await callback.answer("Пост ещё не редактировался — это и есть оригинал")
         text = post["text"]
     else:
-        # свитч: показываем оригинал, при повторном нажатии — снова отредактированный
         showing = post.get("showing_original", False)
         if showing:
             post["showing_original"] = False
@@ -649,7 +663,8 @@ async def handle_original(callback: types.CallbackQuery, state: FSMContext):
             post["showing_original"] = True
             text = post["text"]
             await callback.answer("📄 Оригинал")
-        await state.update_data(posts=posts)
+        # Сохраняем флаг в БД
+        db.update_parsed_post(post["id"], edited, photo_path=post.get("photo_path"))
 
     await _update_post_message(callback, index, text)
 
@@ -660,13 +675,11 @@ async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMConte
     if index is None:
         await callback.answer("❌ Невалидный запрос")
         return
-    state_data = await state.get_data()
-    posts = state_data.get("posts", [])
-    if index >= len(posts):
+    post = await _get_post_from_db(state, index)
+    if not post:
         await callback.answer("❌ Пост не найден")
         return
 
-    post = posts[index]
     if not post.get("photo_path"):
         await callback.answer("❌ У поста нет фото")
         return
@@ -682,13 +695,10 @@ async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMConte
         try:
             image_prompt = db.get_setting("image_prompt")
             new_photo = await regenerate_photo(post["photo_path"], image_prompt)
-            # Сохраняем новое фото в состояние, чтобы оно опубликовалось
-            posts[index]["photo_path"] = new_photo
-            posts[index]["photo_paths"] = [new_photo]
-            await state.update_data(posts=posts)
-            caption = f"✅ Фото переработано!\n\n{posts[index].get('edited_text') or post['text']}"
+            # Сохраняем новое фото в БД
+            db.update_parsed_post(post["id"], post.get("edited_text") or post["text"], photo_path=new_photo)
+            caption = f"✅ Фото переработано!\n\n{post.get('edited_text') or post['text']}"
             await callback.message.answer_photo(photo=_photo(new_photo), caption=_cap(caption), parse_mode="HTML")
-            # Возвращаем кнопки на исходное сообщение
             try:
                 await callback.message.edit_reply_markup(reply_markup=_post_kb(index))
             except Exception:
@@ -704,23 +714,24 @@ async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMConte
 
 @dp.callback_query(lambda c: c.data.startswith("publish_"))
 async def handle_publish(callback: types.CallbackQuery, state: FSMContext):
-    index = int(callback.data.split("_")[-1])
-    state_data = await state.get_data()
-    posts = state_data.get("posts", [])
-    if index >= len(posts):
+    index = _parse_index(callback)
+    if index is None:
+        await callback.answer("❌ Невалидный запрос")
+        return
+    post = await _get_post_from_db(state, index)
+    if not post:
         await callback.answer("❌ Пост не найден")
         return
 
     await callback.answer("✅ Добавлено в очередь!")
-    post = posts[index]
 
-    # Что показано сейчас, то и публикуем: оригинал (если свитч) или отредактированное
+    # Что показано сейчас, то и публикуем
     if post.get("showing_original"):
         final_text = post["text"]
     else:
         final_text = post.get("edited_text") or post["text"]
 
-    post_id = enqueue_post(final_text, post.get("photo_path"), post.get("channel", ""), post["msg_id"])
+    post_id = enqueue_post(final_text, post.get("photo_path"), post.get("source_channel", ""), post["msg_id"])
 
     await send_with_topic(
         callback.message.chat.id,

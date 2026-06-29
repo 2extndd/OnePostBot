@@ -48,6 +48,21 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS parsed_posts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL,
+    photo_path TEXT,
+    photo_paths TEXT,
+    source_channel TEXT,
+    msg_id INTEGER,
+    date TEXT,
+    channel_title TEXT,
+    channel_username TEXT,
+    edited_text TEXT,
+    showing_original BOOLEAN DEFAULT 0,
+    parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -209,3 +224,63 @@ def get_all_settings() -> Dict[str, str]:
     for r in rows:
         result[r["key"]] = r["value"]
     return result
+
+
+# ---------- Parsed Posts (fixes lost-update from FSM) ----------
+
+def save_parsed_post(text: str, photo_path: Optional[str], photo_paths: Optional[str],
+                     source_channel: str, msg_id: int, date: str,
+                     channel_title: str, channel_username: str) -> int:
+    """Сохраняет спаршенный пост. Возвращает id."""
+    with _connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO parsed_posts 
+               (text, photo_path, photo_paths, source_channel, msg_id, date, 
+                channel_title, channel_username)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (text, photo_path, photo_paths, source_channel, msg_id, date,
+             channel_title, channel_username),
+        )
+        return cur.lastrowid
+
+
+def get_parsed_post(post_id: int) -> Optional[Dict]:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM parsed_posts WHERE id = ?", (post_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_parsed_post(post_id: int, edited_text: str, photo_path: Optional[str] = None):
+    """Обновляет пост после рерайта/рекламы/фото."""
+    with _connect() as conn:
+        if photo_path is not None:
+            conn.execute(
+                "UPDATE parsed_posts SET edited_text = ?, photo_path = ?, showing_original = 0 WHERE id = ?",
+                (edited_text, photo_path, post_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE parsed_posts SET edited_text = ?, showing_original = 0 WHERE id = ?",
+                (edited_text, post_id),
+            )
+    logger.info(f"📝 Пост #{post_id} обновлён")
+
+
+def get_parsed_posts(ids: List[int]) -> List[Dict]:
+    """Получить список постов по id."""
+    if not ids:
+        return []
+    placeholders = ",".join("?" * len(ids))
+    with _connect() as conn:
+        rows = conn.execute(f"SELECT * FROM parsed_posts WHERE id IN ({placeholders})", ids).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_parsed_posts(ids: List[int]):
+    """Удалить посты после публикации."""
+    if not ids:
+        return
+    placeholders = ",".join("?" * len(ids))
+    with _connect() as conn:
+        conn.execute(f"DELETE FROM parsed_posts WHERE id IN ({placeholders})", ids)
+    logger.info(f"🗑 Удалено {len(ids)} постов из очереди")
