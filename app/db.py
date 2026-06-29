@@ -228,26 +228,39 @@ def get_all_settings() -> Dict[str, str]:
 
 # ---------- Parsed Posts (fixes lost-update from FSM) ----------
 
-def save_parsed_post(text: str, photo_path: Optional[str], photo_paths: Optional[str],
-                     source_channel: str, msg_id: int, date: str,
-                     channel_title: str, channel_username: str) -> int:
-    """Сохраняет спаршенный пост. Возвращает id."""
+def save_parsed_post(text: str, photo_path: Optional[str], photo_paths=None,
+                     source_channel: str = "", msg_id: int = 0, date: str = "",
+                     channel_title: str = "", channel_username: str = "") -> int:
+    """Сохраняет спаршенный пост. photo_paths сериализуется в JSON. Возвращает id."""
+    paths_json = json.dumps(photo_paths) if photo_paths else None
     with _connect() as conn:
         cur = conn.execute(
             """INSERT INTO parsed_posts 
                (text, photo_path, photo_paths, source_channel, msg_id, date, 
                 channel_title, channel_username)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (text, photo_path, photo_paths, source_channel, msg_id, date,
+            (text, photo_path, paths_json, source_channel, msg_id, date,
              channel_title, channel_username),
         )
         return cur.lastrowid
 
 
+def _deserialize_post(row) -> Optional[Dict]:
+    if not row:
+        return None
+    d = dict(row)
+    if d.get("photo_paths"):
+        try:
+            d["photo_paths"] = json.loads(d["photo_paths"])
+        except (ValueError, TypeError):
+            d["photo_paths"] = None
+    return d
+
+
 def get_parsed_post(post_id: int) -> Optional[Dict]:
     with _connect() as conn:
         row = conn.execute("SELECT * FROM parsed_posts WHERE id = ?", (post_id,)).fetchone()
-    return dict(row) if row else None
+    return _deserialize_post(row)
 
 
 def update_parsed_post(post_id: int, edited_text: str, photo_path: Optional[str] = None):
@@ -273,7 +286,7 @@ def get_parsed_posts(ids: List[int]) -> List[Dict]:
     placeholders = ",".join("?" * len(ids))
     with _connect() as conn:
         rows = conn.execute(f"SELECT * FROM parsed_posts WHERE id IN ({placeholders})", ids).fetchall()
-    return [dict(r) for r in rows]
+    return [_deserialize_post(r) for r in rows]
 
 
 def delete_parsed_posts(ids: List[int]):
