@@ -273,12 +273,10 @@ async def do_parse(message: Message, state: FSMContext, count: int = 10, channel
             )
             post_ids.append(pid)
 
-        # Сохраняем id в состоянии (маленький хвост)
-        await state.update_data(post_ids=post_ids)
+        # Сохраняем id в состоянии, показываем ОДНУ карточку с навигацией
+        await state.update_data(post_ids=post_ids, current_index=0, card_message_id=None, card_is_photo=False)
         await send_with_topic(message.chat.id, f"📥 Найдено {len(posts)} постов из {len(channels)} каналов.")
-        # Отправляем ВСЕ посты сразу, каждый со своими кнопками (без листалки)
-        for i in range(len(posts)):
-            await show_post(parser, posts, message, state, index=i)
+        await show_card(message, state, index=0, edit=False)
 
     except Exception as e:
         logger.error(f"Parse error: {e}\n{traceback.format_exc()}")
@@ -367,42 +365,131 @@ async def cmd_delchannel(message: Message):
 
 # ---------- post display ----------
 
-def _post_kb(index: int) -> InlineKeyboardMarkup:
-    """Клавиатура действий под постом."""
+def _post_kb(index: int, total: int = 1) -> InlineKeyboardMarkup:
+    """Клавиатура карточки: навигация + действия."""
+    nav_prev = InlineKeyboardButton(
+        text="⬅️ Назад" if index > 0 else "⬅️",
+        callback_data="nav_prev" if index > 0 else "noop",
+    )
+    nav_center = InlineKeyboardButton(text=f"{index + 1}/{total}", callback_data="noop")
+    nav_next = InlineKeyboardButton(
+        text="➡️ Далее" if index < total - 1 else "➡️",
+        callback_data="nav_next" if index < total - 1 else "noop",
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [nav_prev, nav_center, nav_next],
             [
-                InlineKeyboardButton(text="📝 Рерайт", callback_data=f"rewrite_{index}"),
-                InlineKeyboardButton(text="✍️ Рерайт промт", callback_data=f"rewrite_custom_{index}"),
+                InlineKeyboardButton(text="📝 Рерайт", callback_data="act_rewrite"),
+                InlineKeyboardButton(text="✍️ Рерайт промт", callback_data="act_rewrite_custom"),
             ],
             [
-                InlineKeyboardButton(text="🎯 Реклама", callback_data=f"ad_{index}"),
-                InlineKeyboardButton(text="🌐 Перевести", callback_data=f"translate_{index}"),
+                InlineKeyboardButton(text="🎯 Реклама", callback_data="act_ad"),
+                InlineKeyboardButton(text="🌐 Перевести", callback_data="act_translate"),
             ],
             [
-                InlineKeyboardButton(text="🖼 Фото", callback_data=f"regen_photo_{index}"),
-                InlineKeyboardButton(text="📄 Оригинал", callback_data=f"orig_{index}"),
+                InlineKeyboardButton(text="🖼 Фото", callback_data="act_photo"),
+                InlineKeyboardButton(text="📄 Оригинал", callback_data="act_orig"),
             ],
             [
-                InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"publish_{index}"),
+                InlineKeyboardButton(text="✅ Опубликовать", callback_data="act_publish"),
             ],
         ],
     )
 
 
-async def _update_post_message(callback, index: int, new_text: str):
-    """Редактирует сообщение с постом на месте (caption для фото, text для текста)."""
-    kb = _post_kb(index)
-    msg = callback.message
-    try:
-        if msg.photo or msg.caption is not None:
-            await msg.edit_caption(caption=_cap(new_text), parse_mode="HTML", reply_markup=kb)
-        else:
-            await msg.edit_text(_cap(new_text, 4096), parse_mode="HTML", reply_markup=kb)
-    except Exception as e:
-        # Не удалось отредактировать (например, альбом — кнопки в отдельном сообщении) — шлём новое
-        logger.warning(f"edit failed, sending new: {e}")
-        await send_with_topic(msg.chat.id, _cap(new_text, 4096), reply_markup=kb, parse_mode="HTML")
+async def _total(state) -> int:
+    data = await state.get_data()
+    return len(data.get("post_ids", []))
+
+
+async def show_card(message: Message, state: FSMContext, index: int = 0, edit: bool = False):
+    """
+    Показать карточку поста (single-message card view).
+    edit=False → отправить новую карточку, сохранить card_message_id/card_is_photo
+    edit=True  → отредактировать текущую карточку (или пересоздать при смене типа)
+    """
+    data = await state.get_data()
+    post_ids = data.get("post_ids", [])
+    total = len(post_ids)
+    if total == 0:
+        await send_with_topic(message.chat.id, "📭 Нет постов.")
+        return
+
+    index = max(0, min(index, total - 1))
+    post = db.get_parsed_post(post_ids[index])
+    if not post:
+        await send_with_topic(message.chat.id, "❌ Пост не найден.")
+        return
+
+    # Текущая версия для показа (оригинал/отредактированный)
+    if post.get("showing_original"):
+        body = post["text"]
+    else:
+        body = post.get("edited_text") or post["text"]
+    channel_name = post.get("channel_title") or post.get("channel_username") or "unknown"
+    kb = _post_kb(index, total)
+
+    photo_paths = post.get("photo_paths") or ([post["photo_path"]] if post.get("photo_path") else [])
+    is_photo = bool(photo_paths)
+    caption = _cap(body, 1024) if body else channel_name
+
+    card_id = data.get("card_message_id")
+    card_is_photo = data.get("card_is_photo", False)
+    chat_id = message.chat.id
+
+    if edit and card_id is not None:
+        # Если тип совпадает — редактируем на месте
+        if is_photo and card_is_photo:
+            try:
+                from aiogram.types import InputMediaPhoto
+                await bot.edit_message_media(
+                    chat_id=chat_id, message_id=card_id,
+                    media=InputMediaPhoto(media=_photo(photo_paths[0]), caption=caption, parse_mode="HTML"),
+                    reply_markup=kb,
+                )
+                return
+            except Exception as e:
+                logger.warning(f"edit_media failed: {e}")
+                # пробуем хотя бы caption
+                try:
+                    await bot.edit_message_caption(chat_id=chat_id, message_id=card_id, caption=caption, parse_mode="HTML", reply_markup=kb)
+                    return
+                except Exception:
+                    pass
+        elif not is_photo and not card_is_photo:
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id, message_id=card_id,
+                    text=_cap(body, 4096) if body else channel_name,
+                    parse_mode="HTML", reply_markup=kb,
+                )
+                return
+            except Exception as e:
+                logger.warning(f"edit_text failed: {e}")
+        # Тип изменился (текст↔фото) — удаляем старую, шлём новую
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=card_id)
+        except Exception:
+            pass
+
+    # Отправляем новую карточку
+    if is_photo:
+        sent = await bot.send_photo(
+            chat_id=chat_id, photo=_photo(photo_paths[0]), caption=caption,
+            reply_markup=kb, parse_mode="HTML", message_thread_id=_current_thread.get(),
+        )
+    else:
+        sent = await bot.send_message(
+            chat_id=chat_id, text=_cap(body, 4096) if body else channel_name,
+            reply_markup=kb, parse_mode="HTML", message_thread_id=_current_thread.get(),
+        )
+    await state.update_data(card_message_id=sent.message_id, card_is_photo=is_photo, current_index=index)
+
+
+async def _refresh_card(callback, state, index, new_body=None):
+    """Перерисовать карточку после действия (рерайт/реклама и т.п.)."""
+    await show_card(callback.message, state, index=index, edit=True)
 
 
 # Защита от двойных кликов: блокировки по (chat_id, message_id)
@@ -421,73 +508,10 @@ async def _set_status(callback, status_text: str):
     busy_kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=status_text, callback_data="noop"),
     ]])
-    msg = callback.message
     try:
-        await msg.edit_reply_markup(reply_markup=busy_kb)
+        await callback.message.edit_reply_markup(reply_markup=busy_kb)
     except Exception:
         pass
-
-
-def _parse_index(callback):
-    """Безопасно извлекает индекс из callback_data. None если невалидно."""
-    try:
-        return int(callback.data.split("_")[-1])
-    except (ValueError, IndexError, AttributeError):
-        return None
-
-
-
-async def show_post(parser: TGParser, posts: List[Dict], message: Message, state: FSMContext, index: int = 0):
-    """Показать один пост с кнопками."""
-    if index >= len(posts):
-        await send_with_topic(message.chat.id, "✅ Все посты просмотрены.")
-        return
-
-    if index < 0:
-        index = 0
-
-    post = posts[index]
-    full_text = post["text"]
-    channel_name = post.get("channel", post.get("channel_username", "unknown"))
-
-    kb = _post_kb(index)
-
-    photo_paths = post.get("photo_paths") or ([post["photo_path"]] if post.get("photo_path") else [])
-
-    if len(photo_paths) > 1:
-        # Альбом: отправляем media_group (без кнопок — Telegram не разрешает), затем кнопки отдельно
-        from aiogram.types import InputMediaPhoto
-        media = []
-        caption = _cap(full_text) if full_text else channel_name
-        for i, p in enumerate(photo_paths[:10]):
-            if i == 0:
-                media.append(InputMediaPhoto(media=_photo(p), caption=caption, parse_mode="HTML"))
-            else:
-                media.append(InputMediaPhoto(media=_photo(p)))
-        try:
-            await bot.send_media_group(
-                chat_id=message.chat.id, media=media,
-                message_thread_id=_current_thread.get(),
-            )
-        except Exception as e:
-            logger.error(f"send_media_group error: {e}")
-        # Кнопки отдельным сообщением
-        await bot.send_message(
-            chat_id=message.chat.id, text="⬆️ Действия с постом:",
-            reply_markup=kb, message_thread_id=_current_thread.get(),
-        )
-    elif photo_paths:
-        caption = _cap(full_text) if full_text else channel_name
-        await message.answer_photo(
-            photo=_photo(photo_paths[0]), caption=caption,
-            reply_markup=kb, parse_mode="HTML",
-        )
-    else:
-        text = _cap(full_text, 4096) if full_text else channel_name
-        await bot.send_message(
-            chat_id=message.chat.id, text=text, reply_markup=kb,
-            parse_mode="HTML", message_thread_id=_current_thread.get(),
-        )
 
 
 # ---------- callbacks ----------
@@ -506,40 +530,59 @@ async def handle_noop(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@dp.callback_query(lambda c: c.data.startswith("rewrite_") and not c.data.startswith("rewrite_custom_"))
+async def _current_post(state):
+    """Текущий пост (по current_index из state)."""
+    data = await state.get_data()
+    idx = data.get("current_index", 0)
+    post = await _get_post_from_db(state, idx)
+    return idx, post
+
+
+# ---------- Навигация ⬅️ ➡️ ----------
+
+@dp.callback_query(lambda c: c.data in ("nav_prev", "nav_next"))
+async def handle_nav(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    total = len(data.get("post_ids", []))
+    idx = data.get("current_index", 0)
+    idx = idx + 1 if callback.data == "nav_next" else idx - 1
+    idx = max(0, min(idx, total - 1))
+    await state.update_data(current_index=idx)
+    await show_card(callback.message, state, index=idx, edit=True)
+    await callback.answer()
+
+
+# ---------- Действия (работают с текущим постом) ----------
+
+@dp.callback_query(lambda c: c.data == "act_rewrite")
 async def handle_rewrite(callback: types.CallbackQuery, state: FSMContext):
-    index = _parse_index(callback)
-    if index is None:
-        await callback.answer("❌ Невалидный запрос")
-        return
-    post = await _get_post_from_db(state, index)
+    idx, post = await _current_post(state)
     if not post:
         await callback.answer("❌ Пост не найден")
         return
-
     lock = _get_lock(callback)
     if lock.locked():
-        await callback.answer("⏳ Уже обрабатывается, подождите...")
+        await callback.answer("⏳ Уже обрабатывается...")
         return
-
     async with lock:
         await callback.answer("📝 Рерайчу...")
         await _set_status(callback, "📝 Рерайчу... LLM думает")
         try:
             new_text = await rewrite_news(post["text"])
             db.update_parsed_post(post["id"], new_text, photo_path=post.get("photo_path"))
-            await _update_post_message(callback, index, new_text)
+            await show_card(callback.message, state, index=idx, edit=True)
         except Exception as e:
             logger.error(f"Rewrite error: {e}")
-            await _update_post_message(callback, index, post["text"])
+            await show_card(callback.message, state, index=idx, edit=True)
             await callback.answer("❌ Ошибка рерайта", show_alert=True)
 
 
-@dp.callback_query(lambda c: c.data.startswith("rewrite_custom_"))
+@dp.callback_query(lambda c: c.data == "act_rewrite_custom")
 async def handle_rewrite_custom(callback: types.CallbackQuery, state: FSMContext):
-    index = int(callback.data.split("_")[-1])
+    data = await state.get_data()
+    idx = data.get("current_index", 0)
     await state.set_state(RewriteState.waiting_prompt)
-    await state.update_data(rewrite_index=index)
+    await state.update_data(rewrite_index=idx)
     await send_with_topic(callback.message.chat.id, "✍️ Введи свой промпт для рерайта:")
     await callback.answer()
 
@@ -548,50 +591,33 @@ async def handle_rewrite_custom(callback: types.CallbackQuery, state: FSMContext
 async def handle_rewrite_input(message: Message, state: FSMContext):
     prompt = message.text
     data = await state.get_data()
-    index = data.get("rewrite_index")
-    state_data = await state.get_data()
-    posts = state_data.get("posts", [])
-
-    if index >= len(posts):
-        await state.clear()
+    idx = data.get("rewrite_index", 0)
+    post = await _get_post_from_db(state, idx)
+    await state.set_state(None)
+    if not post:
         await send_error(message.chat.id, "Пост не найден")
         return
-
-    await send_with_topic(message.chat.id, "🔄 Переписываю...")
+    await send_with_topic(message.chat.id, "📝 Рерайчу по запросу...")
     try:
-        post = posts[index]
         new_text = await rewrite_news(post["text"], custom_prompt=prompt)
-        posts[index]["edited_text"] = new_text
-        posts[index]["showing_original"] = False
-        await state.update_data(posts=posts)
-        caption = f"✅ Рерайт (по запросу):\n\n{new_text}"
-        if post.get("photo_path"):
-            await message.answer_photo(photo=_photo(post["photo_path"]), caption=_cap(caption), parse_mode="HTML")
-        else:
-            await send_with_topic(message.chat.id, caption, parse_mode="HTML")
+        db.update_parsed_post(post["id"], new_text, photo_path=post.get("photo_path"))
+        # Перерисуем карточку
+        await show_card(message, state, index=idx, edit=True)
     except Exception as e:
         logger.error(f"Rewrite custom error: {e}")
         await send_error(message.chat.id, f"{e}")
 
-    await state.clear()
 
-
-@dp.callback_query(lambda c: c.data.startswith("translate_"))
+@dp.callback_query(lambda c: c.data == "act_translate")
 async def handle_translate(callback: types.CallbackQuery, state: FSMContext):
-    index = _parse_index(callback)
-    if index is None:
-        await callback.answer("❌ Невалидный запрос")
-        return
-    post = await _get_post_from_db(state, index)
+    idx, post = await _current_post(state)
     if not post:
         await callback.answer("❌ Пост не найден")
         return
-
     lock = _get_lock(callback)
     if lock.locked():
-        await callback.answer("⏳ Уже обрабатывается, подождите...")
+        await callback.answer("⏳ Уже обрабатывается...")
         return
-
     async with lock:
         await callback.answer("🌐 Перевожу...")
         await _set_status(callback, "🌐 Перевожу... LLM думает")
@@ -599,30 +625,23 @@ async def handle_translate(callback: types.CallbackQuery, state: FSMContext):
             base_text = post["text"] if post.get("showing_original") else (post.get("edited_text") or post["text"])
             translated = await translate_text(base_text)
             db.update_parsed_post(post["id"], translated, photo_path=post.get("photo_path"))
-            await _update_post_message(callback, index, translated)
+            await show_card(callback.message, state, index=idx, edit=True)
         except Exception as e:
             logger.error(f"Translate error: {e}")
-            await _update_post_message(callback, index, post.get("edited_text") or post["text"])
+            await show_card(callback.message, state, index=idx, edit=True)
             await callback.answer("❌ Ошибка перевода", show_alert=True)
 
 
-@dp.callback_query(lambda c: c.data.startswith("ad_"))
+@dp.callback_query(lambda c: c.data == "act_ad")
 async def handle_ad(callback: types.CallbackQuery, state: FSMContext):
-    """Добавить рекламную интеграцию к посту."""
-    index = _parse_index(callback)
-    if index is None:
-        await callback.answer("❌ Невалидный запрос")
-        return
-    post = await _get_post_from_db(state, index)
+    idx, post = await _current_post(state)
     if not post:
         await callback.answer("❌ Пост не найден")
         return
-
     lock = _get_lock(callback)
     if lock.locked():
-        await callback.answer("⏳ Уже обрабатывается, подождите...")
+        await callback.answer("⏳ Уже обрабатывается...")
         return
-
     async with lock:
         await callback.answer("🎯 Добавляю рекламу...")
         await _set_status(callback, "🎯 Интегрирую рекламу... LLM думает")
@@ -630,114 +649,77 @@ async def handle_ad(callback: types.CallbackQuery, state: FSMContext):
             base_text = post["text"] if post.get("showing_original") else (post.get("edited_text") or post["text"])
             new_text = await add_ad(base_text)
             db.update_parsed_post(post["id"], new_text, photo_path=post.get("photo_path"))
-            await _update_post_message(callback, index, new_text)
+            await show_card(callback.message, state, index=idx, edit=True)
         except Exception as e:
             logger.error(f"Ad error: {e}")
-            await _update_post_message(callback, index, post.get("edited_text") or post["text"])
+            await show_card(callback.message, state, index=idx, edit=True)
             await callback.answer("❌ Ошибка рекламы", show_alert=True)
 
 
-@dp.callback_query(lambda c: c.data.startswith("orig_"))
+@dp.callback_query(lambda c: c.data == "act_orig")
 async def handle_original(callback: types.CallbackQuery, state: FSMContext):
-    """Свитч между оригиналом и последней отредактированной версией."""
-    index = _parse_index(callback)
-    if index is None:
-        await callback.answer("❌ Невалидный запрос")
-        return
-    post = await _get_post_from_db(state, index)
+    """Свитч между оригиналом и отредактированной версией."""
+    idx, post = await _current_post(state)
     if not post:
         await callback.answer("❌ Пост не найден")
         return
-
     edited = post.get("edited_text")
     if not edited:
-        await callback.answer("Пост ещё не редактировался — это и есть оригинал")
-        text = post["text"]
-    else:
-        showing = post.get("showing_original", False)
-        if showing:
-            post["showing_original"] = False
-            text = edited
-            await callback.answer("↩️ Отредактированная версия")
-        else:
-            post["showing_original"] = True
-            text = post["text"]
-            await callback.answer("📄 Оригинал")
-        # Сохраняем флаг в БД
-        db.update_parsed_post(post["id"], edited, photo_path=post.get("photo_path"))
-
-    await _update_post_message(callback, index, text)
-
-
-@dp.callback_query(lambda c: c.data.startswith("regen_photo_"))
-async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMContext):
-    index = _parse_index(callback)
-    if index is None:
-        await callback.answer("❌ Невалидный запрос")
+        await callback.answer("Пост ещё не редактировался")
         return
-    post = await _get_post_from_db(state, index)
+    new_showing = not post.get("showing_original", False)
+    # Сохраняем флаг
+    with db._connect() as conn:
+        conn.execute("UPDATE parsed_posts SET showing_original = ? WHERE id = ?",
+                     (1 if new_showing else 0, post["id"]))
+    await callback.answer("📄 Оригинал" if new_showing else "↩️ Отредактированная версия")
+    await show_card(callback.message, state, index=idx, edit=True)
+
+
+@dp.callback_query(lambda c: c.data == "act_photo")
+async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMContext):
+    idx, post = await _current_post(state)
     if not post:
         await callback.answer("❌ Пост не найден")
         return
-
     if not post.get("photo_path"):
         await callback.answer("❌ У поста нет фото")
         return
-
     lock = _get_lock(callback)
     if lock.locked():
-        await callback.answer("⏳ Уже обрабатывается, подождите...")
+        await callback.answer("⏳ Уже обрабатывается...")
         return
-
     async with lock:
         await callback.answer("🖼 Перегенерирую фото...")
         await _set_status(callback, "🖼 Генерирую изображение... (~30 сек)")
         try:
             image_prompt = db.get_setting("image_prompt")
             new_photo = await regenerate_photo(post["photo_path"], image_prompt)
-            # Сохраняем новое фото в БД
             db.update_parsed_post(post["id"], post.get("edited_text") or post["text"], photo_path=new_photo)
-            caption = f"✅ Фото переработано!\n\n{post.get('edited_text') or post['text']}"
-            await callback.message.answer_photo(photo=_photo(new_photo), caption=_cap(caption), parse_mode="HTML")
-            try:
-                await callback.message.edit_reply_markup(reply_markup=_post_kb(index))
-            except Exception:
-                pass
+            await show_card(callback.message, state, index=idx, edit=True)
         except Exception as e:
             logger.error(f"Regen photo error: {e}")
-            try:
-                await callback.message.edit_reply_markup(reply_markup=_post_kb(index))
-            except Exception:
-                pass
+            await show_card(callback.message, state, index=idx, edit=True)
             await callback.answer("❌ Ошибка генерации фото", show_alert=True)
 
 
-@dp.callback_query(lambda c: c.data.startswith("publish_"))
+@dp.callback_query(lambda c: c.data == "act_publish")
 async def handle_publish(callback: types.CallbackQuery, state: FSMContext):
-    index = _parse_index(callback)
-    if index is None:
-        await callback.answer("❌ Невалидный запрос")
-        return
-    post = await _get_post_from_db(state, index)
+    idx, post = await _current_post(state)
     if not post:
         await callback.answer("❌ Пост не найден")
         return
-
     await callback.answer("✅ Добавлено в очередь!")
-
-    # Что показано сейчас, то и публикуем
     if post.get("showing_original"):
         final_text = post["text"]
     else:
         final_text = post.get("edited_text") or post["text"]
-
     post_id = enqueue_post(final_text, post.get("photo_path"), post.get("source_channel", ""), post["msg_id"])
-
     await send_with_topic(
         callback.message.chat.id,
-        f"📝 Пост #{post_id} добавлен в очередь.\n\n"
-        f"Нажмите «📤 Опубликовать» в меню, чтобы опубликовать во все топики.",
+        f"📝 Пост #{post_id} добавлен в очередь.\nНажмите «📤 Опубликовать» в меню для отправки во все топики.",
     )
+
 
 
 async def do_publish(message: Message):
