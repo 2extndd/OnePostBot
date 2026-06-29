@@ -371,7 +371,7 @@ def _post_kb(index: int, total: int = 1) -> InlineKeyboardMarkup:
         text="⬅️ Назад" if index > 0 else "⬅️",
         callback_data="nav_prev" if index > 0 else "noop",
     )
-    nav_center = InlineKeyboardButton(text=f"{index + 1}/{total}", callback_data="noop")
+    nav_center = InlineKeyboardButton(text=f"{index + 1}/{total}", callback_data="expand_more")
     nav_next = InlineKeyboardButton(
         text="➡️ Далее" if index < total - 1 else "➡️",
         callback_data="nav_next" if index < total - 1 else "noop",
@@ -393,6 +393,9 @@ def _post_kb(index: int, total: int = 1) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="✅ Опубликовать", callback_data="act_publish"),
+            ],
+            [
+                InlineKeyboardButton(text="➕ Расширить парсинг", callback_data="expand_more"),
             ],
         ],
     )
@@ -528,6 +531,102 @@ async def _get_post_from_db(state, index: int):
 @dp.callback_query(lambda c: c.data == "noop")
 async def handle_noop(callback: types.CallbackQuery):
     await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data == "expand_more")
+async def handle_expand_request(callback: types.CallbackQuery, state: FSMContext):
+    """Клик по числу «N/M» → расширение парсинга."""
+    data = await state.get_data()
+    total = len(data.get("post_ids", []))
+    if total == 0:
+        await callback.answer("Нет постов для расширения")
+        return
+    await state.set_state(ExpandState.waiting_count)
+    await state.update_data(expand_chat_id=callback.message.chat.id)
+    await callback.message.reply(
+        "➕ Сколько постов добавить с каждого канала?",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="Назад в карточку")]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        ),
+    )
+    await callback.answer()
+
+
+# ---------- Расширение парсинга (ввод числа) ----------
+
+@dp.message(ExpandState.waiting_count)
+async def handle_expand_input(message: Message, state: FSMContext):
+    try:
+        count = int(message.text.strip())
+    except ValueError:
+        await message.reply("❌ Введите число (например 5)")
+        return
+
+    # Кнопка "Назад в карточку"
+    if message.text.strip() == "Назад в карточку":
+        await state.clear()
+        await send_error(message.chat.id, "Карточка на месте.")
+        return
+
+    await state.clear()
+
+    # Получаем текущие каналы
+    db_channels = db.get_channels() or PARSE_CHANNELS
+    if not db_channels:
+        await send_error(message.chat.id, "Нет каналов для парсинга.")
+        return
+
+    # Парсим ещё N постов с каждого канала
+    parser = TGParser(phone=TELEPHONE)
+    await parser.start()
+    try:
+        new_posts = await parser.fetch_with_photos(
+            channels=db_channels,
+            since_days=PARSE_DAYS,
+            limit=count,
+        )
+        if not new_posts:
+            await send_error(message.chat.id, "Нет новых постов.")
+            return
+
+        # Сохраняем в БД
+        post_ids = []
+        for p in new_posts:
+            photo_paths = p.get("photo_paths") or ([p.get("photo_path")] if p.get("photo_path") else None)
+            pid = db.save_parsed_post(
+                text=p["text"],
+                photo_path=p.get("photo_path"),
+                photo_paths=photo_paths,
+                source_channel=p.get("channel", ""),
+                msg_id=p["msg_id"],
+                date=p.get("date", ""),
+                channel_title=p.get("channel", ""),
+                channel_username=p.get("channel_username", ""),
+            )
+            post_ids.append(pid)
+
+        # Добавляем к текущему списку
+        data = await state.get_data()
+        old_ids = data.get("post_ids", [])
+        all_ids = old_ids + post_ids
+        await state.update_data(
+            post_ids=all_ids,
+            current_index=len(old_ids),  # показываем первый новый пост
+            card_message_id=data.get("card_message_id"),
+            card_is_photo=data.get("card_is_photo", False),
+        )
+
+        await send_error(message.chat.id, f"📥 +{len(post_ids)} постов (всего {len(all_ids)})")
+        # Обновляем карточку на первый новый пост
+        await show_card(message, state, index=len(old_ids), edit=True)
+
+    except Exception as e:
+        logger.error(f"Expand parse error: {e}")
+        await send_error(message.chat.id, f"{e}")
+    finally:
+        await parser.close()
 
 
 async def _current_post(state):
