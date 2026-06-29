@@ -66,6 +66,10 @@ class RewriteState(StatesGroup):
     waiting_prompt = State()
 
 
+class ExpandState(StatesGroup):
+    waiting_count = State()
+
+
 class ParseState(StatesGroup):
     waiting_count = State()
 

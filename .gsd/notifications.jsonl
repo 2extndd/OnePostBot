@@ -374,3 +374,4 @@
 {"id":"d227c532-5c78-4a86-a704-a7286a670fa6","ts":"2026-06-29T19:06:33.863Z","severity":"warning","message":"Provider switch anthropic-messages → anthropic-messages: 13 thinking downgraded","source":"workflow-logger","read":false}
 {"id":"8869f844-7957-436f-a09c-cb1b46f64dae","ts":"2026-06-29T19:07:20.176Z","severity":"warning","message":"Provider switch anthropic-messages → anthropic-messages: 13 thinking downgraded","source":"workflow-logger","read":false}
 {"id":"01af5edc-f625-4dfa-80ea-a6a634eb6779","ts":"2026-06-29T19:08:03.513Z","severity":"warning","message":"Provider switch anthropic-messages → anthropic-messages: 13 thinking downgraded","source":"workflow-logger","read":false}
+{"id":"85cdc196-c2d1-4313-9a1c-4e8918a34c91","ts":"2026-06-29T19:09:03.918Z","severity":"warning","message":"Provider switch anthropic-messages → anthropic-messages: 13 thinking downgraded","source":"workflow-logger","read":false}
