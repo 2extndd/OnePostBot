@@ -456,9 +456,17 @@ async def show_card(message: Message, state: FSMContext, index: int = 0, edit: b
     else:
         channel_link = channel_username
     header = f"📰 {channel_link}  •  🕐 {date_fmt}"
-    full_body = f"{header}\n\n{body}" if body else header
 
-    caption = full_body
+    # Caption для фото ограничен 1024, текст — 4096. Заголовок сохраняем, тело обрезаем.
+    def _compose(limit):
+        if not body:
+            return header
+        room = limit - len(header) - 2  # запас на переносы
+        b = _cap(body, max(room, 0)) if room > 0 else ""
+        return f"{header}\n\n{b}"
+
+    caption = _compose(1024)       # для фото
+    full_body = _compose(4096)     # для текста
 
     card_id = data.get("card_message_id")
     card_is_photo = data.get("card_is_photo", False)
