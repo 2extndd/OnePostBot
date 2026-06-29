@@ -472,6 +472,15 @@ async def show_card(message: Message, state: FSMContext, index: int = 0, edit: b
     card_is_photo = data.get("card_is_photo", False)
     chat_id = message.chat.id
 
+    # При force_resend сразу удаляем старую карточку и шлём новую
+    if force_resend and card_id is not None:
+        try:
+            logger.info(f"🗑 [force] Удаляю старую карточку {card_id}")
+            await bot.delete_message(chat_id=chat_id, message_id=card_id)
+        except Exception as e:
+            logger.warning(f"[force] delete failed: {e}")
+        card_id = None  # чтобы дальше пошла отправка новой
+
     if edit and card_id is not None and not force_resend:
         # Если тип совпадает — редактируем на месте
         if is_photo and card_is_photo:
