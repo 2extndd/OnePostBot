@@ -54,7 +54,11 @@ from . import db
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-bot = Bot(token=BOT_TOKEN)
+from aiogram.client.session.aiohttp import AiohttpSession
+
+# Увеличенный таймаут для загрузки фото в Telegram
+_session = AiohttpSession(timeout=120)
+bot = Bot(token=BOT_TOKEN, session=_session)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
