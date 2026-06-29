@@ -22,8 +22,8 @@
 
 ### Архитектурные изменения
 - Новый модуль `db.py` — SQLite слой (channels, parsed_posts, queue, processed_messages, settings)
-- `docker-compose.yml` использует `env_file` — секреты не в git
-- `.env` добавлен в `.gitignore`
+- `docker-compose.yml` — убран `env_file`, все ключи в Dockerfile ENV
+- `.dockerignore` — .env исключён из git
 - Callback-хендлеры теперь берут посты из БД по id
 
 ### Деплой
@@ -32,6 +32,7 @@
 - Контейнер: onepostbot-stack-7gdtph-tg-publisher-1
 - Бот: @AutoOneProviderbot (id=8732968162)
 - Токен: 8732968162:AAHedj6mb2jUMlogz5HLtKpN2aDqCEZdDEM
+- **Секреты в Dockerfile ENV** — Dokploy не перезапишет при деплое
 
 ### Команды бота
 - `/parse N` — парсинг последних N постов
@@ -54,6 +55,4 @@
 - ✅ Опубликовать
 
 ## Открытые вопросы
-- API ключи для LLM (ANTHROPIC_API_KEY, OPENAI_API_KEY) — placeholder'ы
-- TARGET_CHANNEL установлен на @onecodebase (-1003944526531)
-- Dokploy может перезаписывать .env при деплое — нужно настроить через UI или env_file mount
+- OneProvider интеграция — следующая цель (M002)
