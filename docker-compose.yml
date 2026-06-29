@@ -5,7 +5,7 @@ services:
     build: .
     restart: unless-stopped
     volumes:
-      - ./data:/app/data
+      - onepostbot_data:/app/data
     networks:
       - internal
     deploy:
@@ -13,6 +13,11 @@ services:
         limits:
           memory: 512M
           cpus: "1.0"
+
+volumes:
+  onepostbot_data:
+    name: onepostbot-stack-7gdtph_onepostbot_data
+    external: true
 
 networks:
   internal:
