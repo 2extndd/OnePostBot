@@ -55,45 +55,12 @@ def _decode_image_response(data_item) -> bytes:
 
 async def regenerate_photo(image_path: str, prompt: str) -> str:
     """
-    Перегенерируем фото через image-edit API с маской.
-    Маска: центр непрозрачный (сохраняем оригинал), края прозрачные (добавляем рамку).
+    Перегенерируем фото через image-edit API (VectorEngine gpt-image-2).
+    API уважает референсное изображение: сохраняет оригинальный контент и
+    добавляет брендовую рамку ONEPROVIDER по промпту. Маска не нужна.
     """
     if not image_path or not os.path.exists(image_path):
         raise FileNotFoundError(f"Файл изображения не найден: {image_path}")
-
-    from PIL import Image
-    import tempfile
-
-    # Открываем оригинал и создаём маску
-    img = Image.open(image_path).convert("RGBA")
-    w, h = img.size
-    
-    # Расширяем холст для рамки (добавляем 10% с каждой стороны)
-    margin = max(int(min(w, h) * 0.1), 64)
-    new_w, new_h = w + margin * 2, h + margin * 2
-    
-    # Новое изображение с белым фоном
-    expanded = Image.new("RGBA", (new_w, new_h), (255, 255, 255, 255))
-    expanded.paste(img, (margin, margin))
-    
-    # Маска: центр чёрный (сохранить), края белые (редактировать)
-    mask = Image.new("L", (new_w, new_h), 255)  # всё белое (прозрачное)
-    from PIL import ImageDraw
-    draw = ImageDraw.Draw(mask)
-    draw.rectangle([margin, margin, new_w - margin, new_h - margin], fill=0)  # центр чёрный
-    
-    # Resize к 1024x1024 (требование API)
-    expanded = expanded.resize((1024, 1024), Image.Resampling.LANCZOS).convert("RGB")
-    mask = mask.resize((1024, 1024), Image.Resampling.LANCZOS)
-    
-    # Сохраняем во временные файлы
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as img_tmp:
-        expanded.save(img_tmp.name, "PNG")
-        img_path_tmp = img_tmp.name
-    
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as mask_tmp:
-        mask.save(mask_tmp.name, "PNG")
-        mask_path_tmp = mask_tmp.name
 
     import concurrent.futures
     retries = 0
@@ -103,14 +70,13 @@ async def regenerate_photo(image_path: str, prompt: str) -> str:
                 future = pool.submit(
                     lambda: _get_client().images.edit(
                         model=IMAGE_MODEL,
-                        image=open(img_path_tmp, "rb"),
-                        mask=open(mask_path_tmp, "rb"),
+                        image=open(image_path, "rb"),
                         prompt=prompt,
                         n=1,
                         size="1024x1024",
                     ),
                 )
-                response = future.result(timeout=180)
+                response = future.result(timeout=120)
 
             image_bytes = _decode_image_response(response.data[0])
             output_path = GENERATED_DIR / f"regenerated_{os.path.basename(image_path)}"
@@ -119,11 +85,6 @@ async def regenerate_photo(image_path: str, prompt: str) -> str:
             with open(output_path, "wb") as f:
                 f.write(image_bytes)
             logger.info(f"🖼 Фото переработано: {output_path}")
-            
-            # Удаляем временные файлы
-            os.unlink(img_path_tmp)
-            os.unlink(mask_path_tmp)
-            
             return str(output_path)
 
         except (APIStatusError, APITimeoutError, APIConnectionError, concurrent.futures.TimeoutError) as e:

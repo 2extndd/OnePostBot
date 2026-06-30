@@ -42,9 +42,9 @@ ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.oneprovid
 LLM_MODEL = os.environ.get("LLM_MODEL", "claude-opus-4-8")
 LLM_THINKING_BUDGET = int(os.environ.get("LLM_THINKING_BUDGET", "8000"))
 
-# Image (cc-vibe)
-OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://cc-vibe.com/v1")
-IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gpt-image-2-medium")
+# Image (VectorEngine)
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.vectorengine.ai/v1")
+IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gpt-image-2")
 
 # Timing
 PARSE_DAYS = int(os.environ.get("PARSE_DAYS", "1"))
