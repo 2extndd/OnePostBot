@@ -1,6 +1,6 @@
 """
-Генерация изображений через gpt-image-2 (VectorEngine, OpenAI-compatible).
-Генерирует НОВЫЕ картинки по промпту поста — не редактирует референсы.
+Редактирование изображений через gpt-image-2 (VectorEngine, OpenAI-compatible).
+Принимает оригинальное фото и добавляет фирменную рамку ONEPROVIDER.
 """
 
 import asyncio
@@ -42,42 +42,30 @@ def _is_retryable(e) -> bool:
     return False
 
 
-def _decode_image_response(data_item) -> bytes:
-    b64 = getattr(data_item, "b64_json", None)
-    if b64:
-        return base64.b64decode(b64)
-    url = getattr(data_item, "url", None)
-    if url:
-        import urllib.request
-        with urllib.request.urlopen(url, timeout=30) as resp:
-            return resp.read()
-    raise ValueError("Ответ image API не содержит b64_json или url")
-
-
-def build_image_prompt(post_text: str) -> str:
-    """Собирает промпт для генерации картинки по тексту поста."""
-    return f"""\
-Create a professional tech/AI-themed illustration for a news post about:\n\n{post_text[:600]}\n\n\nStyle requirements:\n- Modern, clean tech aesthetic\n- Professional color palette (blues, purples, dark backgrounds)\n- Abstract tech imagery (circuits, neural networks, data visualization)\n- No text or typography in the image\n- Suitable for a developer-focused Telegram channel\n- High quality, detailed, visually striking"""
-
-
-async def regenerate_photo(post_text: str) -> str:
+async def regenerate_photo(original_image_path: str) -> str:
     """
-    Генерируем НОВУЮ картинку по нейронке из текста поста.
-    Не используем референс — создаём с нуля через gpt-image-2.
+    Редактирует оригинальное фото: добавляет фирменную рамку ONEPROVIDER.
+    Возвращает путь к результату.
     """
-    if not post_text:
-        raise ValueError("Нет текста поста для генерации изображения")
+    if not original_image_path or not os.path.exists(original_image_path):
+        raise FileNotFoundError(f"Оригинальное фото не найдено: {original_image_path}")
 
-    prompt = build_image_prompt(post_text)
+    frame_prompt = (
+        "Add a clean minimal white border around the image with black L-shaped corner marks "
+        "and vertical ONEPROVIDER text on the right side. "
+        "Keep the original photo content exactly unchanged."
+    )
+
     import concurrent.futures
     retries = 0
     while True:
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 future = pool.submit(
-                    lambda: _get_client().images.generate(
+                    lambda: _get_client().images.edit(
                         model=IMAGE_MODEL,
-                        prompt=prompt,
+                        image=open(original_image_path, "rb"),
+                        prompt=frame_prompt,
                         n=1,
                         size="1024x1024",
                     ),
@@ -88,7 +76,7 @@ async def regenerate_photo(post_text: str) -> str:
             output_path = GENERATED_DIR / f"regen_{os.getpid()}_{retries}.png"
             with open(output_path, "wb") as f:
                 f.write(image_bytes)
-            logger.info(f"🖼 Изображение сгенерировано: {output_path} ({len(image_bytes)} bytes)")
+            logger.info(f"🖼 Изображение отредактировано: {output_path} ({len(image_bytes)} bytes)")
             return str(output_path)
 
         except (APIStatusError, APITimeoutError, APIConnectionError, concurrent.futures.TimeoutError) as e:
@@ -100,6 +88,18 @@ async def regenerate_photo(post_text: str) -> str:
             await asyncio.sleep(wait)
         except Exception as e:
             raise
+
+
+def _decode_image_response(data_item) -> bytes:
+    b64 = getattr(data_item, "b64_json", None)
+    if b64:
+        return base64.b64decode(b64)
+    url = getattr(data_item, "url", None)
+    if url:
+        import urllib.request
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            return resp.read()
+    raise ValueError("Ответ image API не содержит b64_json или url")
 
 
 GENERATED_DIR = DATA_DIR / "generated"

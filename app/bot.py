@@ -838,8 +838,7 @@ async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMConte
         await callback.answer("🖼 Перегенерирую фото...")
         await _set_status(callback, "🖼 Генерирую изображение... (~30 сек)")
         try:
-            post_text = post.get("edited_text") or post["text"]
-            new_photo = await regenerate_photo(post_text)
+            new_photo = await regenerate_photo(post["photo_path"])
             logger.info(f"🖼 Фото переработано: {new_photo}")
             db.update_parsed_post(post["id"], post.get("edited_text") or post["text"], photo_path=new_photo)
             logger.info(f"🖼 Обновляю карточку с force_resend=True, idx={idx}")
