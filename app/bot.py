@@ -1,5 +1,5 @@
 """
-Telegram Bot — основной интерфейс управления.
+Telegram Bot - основной интерфейс управления.
 Команды: /parse N, /publish, /watch, /stop, /help
 """
 
@@ -123,7 +123,6 @@ def settings_menu_kb():
             InlineKeyboardButton(text="📝 Промпт рерайта", callback_data="settings_rewrite_prompt"),
             InlineKeyboardButton(text="🎯 Промпт рекламы", callback_data="settings_ad_prompt"),
         ],
-        [InlineKeyboardButton(text="🖼 Промпт изображений", callback_data="settings_image_prompt")],
         [InlineKeyboardButton(text="👁 Показать все", callback_data="settings_show_all")],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="menu_main")],
     ])
@@ -225,27 +224,27 @@ async def cmd_help(message: Message):
     await send_with_topic(
         message.chat.id,
         "📋 Команды бота:\n\n"
-        "/parse N — показать последние N постов\n"
-        "/parse @channel N — парсить конкретный канал\n\n"
+        "/parse N - показать последние N постов\n"
+        "/parse @channel N - парсить конкретный канал\n\n"
         "📚 Управление каналами:\n"
-        "/channels — список каналов\n"
-        "/addchannel @канал — добавить канал\n"
-        "/delchannel @канал — удалить канал\n\n"
+        "/channels - список каналов\n"
+        "/addchannel @канал - добавить канал\n"
+        "/delchannel @канал - удалить канал\n\n"
         "При показе постов доступны кнопки:\n"
-        "• Рерайт — переписать текст (на английском)\n"
-        "• Рерайт промт — переписать с твоим промптом\n"
-        "• Перевести — перевести на английский\n"
-        "• Перегенерировать фото — улучшить изображение\n"
-        "• Опубликовать — добавить в очередь\n\n"
-        "/publish — опубликовать одобренные посты\n"
-        "/watch — включить мониторинг новых постов\n"
-        "/stop — остановить мониторинг\n"
-        "/config — текущие настройки",
+        "• Рерайт - переписать текст (на английском)\n"
+        "• Рерайт промт - переписать с твоим промптом\n"
+        "• Перевести - перевести на английский\n"
+        "• Перегенерировать фото - улучшить изображение\n"
+        "• Опубликовать - добавить в очередь\n\n"
+        "/publish - опубликовать одобренные посты\n"
+        "/watch - включить мониторинг новых постов\n"
+        "/stop - остановить мониторинг\n"
+        "/config - текущие настройки",
     )
 
 
 async def do_parse(message: Message, state: FSMContext, count: int = 10, channel: str = None):
-    """Общая логика парсинга — вызывается из команды и из меню."""
+    """Общая логика парсинга - вызывается из команды и из меню."""
     parser = TGParser(phone=TELEPHONE)
     await parser.start()
 
@@ -417,7 +416,7 @@ async def _total(state, chat_id: int = None) -> int:
 async def show_card(message: Message, state: FSMContext, index: int = 0, edit: bool = False, force_resend: bool = False):
     """
     Показать карточку поста (single-message card view).
-    Сессия (post_ids, индекс, id карточки) хранится в БД по chat_id — переживает state.clear().
+    Сессия (post_ids, индекс, id карточки) хранится в БД по chat_id - переживает state.clear().
     edit=False → отправить новую карточку, сохранить card_message_id/card_is_photo
     edit=True  → отредактировать текущую карточку (или пересоздать при смене типа)
     """
@@ -464,7 +463,7 @@ async def show_card(message: Message, state: FSMContext, index: int = 0, edit: b
         channel_link = channel_username
     header = f"📰 {channel_link}  •  🕐 {date_fmt}"
 
-    # Caption для фото ограничен 1024, текст — 4096. Заголовок сохраняем, тело обрезаем.
+    # Caption для фото ограничен 1024, текст - 4096. Заголовок сохраняем, тело обрезаем.
     def _compose(limit):
         if not body:
             return header
@@ -488,7 +487,7 @@ async def show_card(message: Message, state: FSMContext, index: int = 0, edit: b
         card_id = None  # чтобы дальше пошла отправка новой
 
     if edit and card_id is not None and not force_resend:
-        # Если тип совпадает — редактируем на месте
+        # Если тип совпадает - редактируем на месте
         if is_photo and card_is_photo:
             try:
                 from aiogram.types import InputMediaPhoto
@@ -516,7 +515,7 @@ async def show_card(message: Message, state: FSMContext, index: int = 0, edit: b
                 return
             except Exception as e:
                 logger.warning(f"edit_text failed: {e}")
-        # Тип изменился (текст↔фото) или force_resend — удаляем старую, шлём новую
+        # Тип изменился (текст↔фото) или force_resend - удаляем старую, шлём новую
         try:
             logger.info(f"🗑 Удаляю старую карточку {card_id}")
             await bot.delete_message(chat_id=chat_id, message_id=card_id)
@@ -839,8 +838,8 @@ async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMConte
         await callback.answer("🖼 Перегенерирую фото...")
         await _set_status(callback, "🖼 Генерирую изображение... (~30 сек)")
         try:
-            image_prompt = db.get_setting("image_prompt")
-            new_photo = await regenerate_photo(post["photo_path"], image_prompt)
+            post_text = post.get("edited_text") or post["text"]
+            new_photo = await regenerate_photo(post_text)
             logger.info(f"🖼 Фото переработано: {new_photo}")
             db.update_parsed_post(post["id"], post.get("edited_text") or post["text"], photo_path=new_photo)
             logger.info(f"🖼 Обновляю карточку с force_resend=True, idx={idx}")
@@ -872,7 +871,7 @@ async def handle_publish(callback: types.CallbackQuery, state: FSMContext):
 
 
 async def do_publish(message: Message):
-    """Общая логика публикации — вызывается из команды и из меню."""
+    """Общая логика публикации - вызывается из команды и из меню."""
     pending = get_pending_posts()
     if not pending:
         await send_error(message.chat.id, "📭 Очередь пуста. Используйте /parse для загрузки постов.")
@@ -953,7 +952,7 @@ async def cb_menu_parse(callback: types.CallbackQuery, state: FSMContext):
         ],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="menu_main")],
     ])
-    await cb_send(callback, 
+    await cb_send(callback,
         "Сколько последних постов спарсить? Выберите или отправьте число:",
         reply_markup=kb,
     )
@@ -989,18 +988,18 @@ async def cb_menu_publish(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "menu_help")
 async def cb_menu_help(callback: types.CallbackQuery):
-    await cb_send(callback, 
+    await cb_send(callback,
         "📋 Как пользоваться:\n\n"
         "1️⃣ «Управление каналами» → добавьте каналы для парсинга\n"
         "2️⃣ «Настройки» → настройте контекст проекта и промпты\n"
         "3️⃣ «Парсить посты» → выберите количество постов\n"
         "4️⃣ Под каждым постом кнопки:\n"
-        "   • Рерайт — переписать по контексту проекта\n"
-        "   • Рерайт промт — переписать по вашему запросу\n"
-        "   • 🎯 Рекламный текст — добавить интеграцию проекта\n"
-        "   • Перевести — перевести на английский\n"
-        "   • Перегенерировать фото — улучшить изображение\n"
-        "   • Опубликовать — добавить в очередь\n"
+        "   • Рерайт - переписать по контексту проекта\n"
+        "   • Рерайт промт - переписать по вашему запросу\n"
+        "   • 🎯 Рекламный текст - добавить интеграцию проекта\n"
+        "   • Перевести - перевести на английский\n"
+        "   • Перегенерировать фото - улучшить изображение\n"
+        "   • Опубликовать - добавить в очередь\n"
         "5️⃣ «Опубликовать» → публикация во все топики",
         reply_markup=main_menu_kb(),
     )
@@ -1014,13 +1013,13 @@ async def cb_menu_settings(callback: types.CallbackQuery):
     channels = db.get_channels()
     ch_text = ", ".join(f"@{c}" for c in channels) if channels else "нет"
     topics_text = "\n".join(f"  • chat={t['chat_id']}, topic={t['topic_id']}" for t in TOPICS)
-    await cb_send(callback, 
+    await cb_send(callback,
         f"⚙️ Настройки:\n\n"
         f"📚 Каналы: {ch_text}\n"
         f"📍 Топики публикации:\n{topics_text}\n"
         f"📅 Дней назад: {PARSE_DAYS}\n"
         f"⏱ Задержка постинга: {POST_DELAY_MIN}-{POST_DELAY_MAX} мин\n\n"
-        f"Ниже — настройка AI-промптов:",
+        f"Ниже - настройка AI-промптов:",
         reply_markup=settings_menu_kb(),
     )
     await callback.answer()
@@ -1031,7 +1030,6 @@ _SETTING_KEYS = {
     "settings_project_context": ("project_context", "📄 Контекст проекта"),
     "settings_rewrite_prompt": ("rewrite_prompt", "📝 Промпт рерайта"),
     "settings_ad_prompt": ("ad_prompt", "🎯 Промпт рекламы"),
-    "settings_image_prompt": ("image_prompt", "🖼 Промпт изображений"),
 }
 
 
@@ -1044,7 +1042,7 @@ async def cb_edit_setting(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Настройки", callback_data="menu_settings")],
     ])
-    await cb_send(callback, 
+    await cb_send(callback,
         f"Текущее значение «{name}»:\n\n{current}\n\n"
         f"✍️ Отправьте новый текст, чтобы заменить:",
         reply_markup=kb,
@@ -1064,11 +1062,10 @@ async def menu_save_setting(message: Message, state: FSMContext):
 @dp.callback_query(F.data == "settings_show_all")
 async def cb_show_settings(callback: types.CallbackQuery):
     s = db.get_all_settings()
-    await cb_send(callback, 
+    await cb_send(callback,
         f"📄 КОНТЕКСТ ПРОЕКТА:\n{s['project_context']}\n\n"
         f"📝 ПРОМПТ РЕРАЙТА:\n{s['rewrite_prompt']}\n\n"
-        f"🎯 ПРОМПТ РЕКЛАМЫ:\n{s['ad_prompt']}\n\n"
-        f"🖼 ПРОМПТ ИЗОБРАЖЕНИЙ:\n{s['image_prompt']}",
+        f"🎯 ПРОМПТ РЕКЛАМЫ:\n{s['ad_prompt']}",
         reply_markup=settings_menu_kb(),
     )
     await callback.answer()
@@ -1099,7 +1096,7 @@ async def cb_channels_add(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Управление каналами", callback_data="menu_channels")],
     ])
-    await cb_send(callback, 
+    await cb_send(callback,
         "Отправьте @username канала (можно несколько через пробел):",
         reply_markup=kb,
     )
@@ -1157,7 +1154,7 @@ async def watch_loop(chat_id: str):
                     last_ids.update(p.get("msg_id", 0) for p in new_posts)
                     await send_with_topic(int(chat_id), f"📬 Найдено {len(new_posts)} новых постов!")
                     # Сохраняем для просмотра
-                    # Примечание: FSM-состояние для другого чата — это workaround,
+                    # Примечание: FSM-состояние для другого чата - это workaround,
                     # лучше бы использовать отдельное хранилище.
                     # Для watch_loop достаточно уведомления, а не показа.
             except Exception as e:

@@ -1,4 +1,4 @@
-# GSD context snapshot (2026-06-30T01:36:47.211Z)
+# GSD context snapshot (2026-06-30T11:10:56.369Z)
 
 ## Top project memories
 - [MEM005] (gotcha) Telethon session auth in Docker: interactive login (code input) won't work without stdin. Session must be authorized beforehand (via _auth.py or interactive script), then the .session file placed in data/.

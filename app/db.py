@@ -198,7 +198,6 @@ DEFAULT_SETTINGS = {
     "project_context": prompts.PROJECT_CONTEXT,
     "rewrite_prompt": prompts.REWRITE_PROMPT,
     "ad_prompt": prompts.AD_PROMPT,
-    "image_prompt": prompts.IMAGE_PROMPT,
 }
 
 

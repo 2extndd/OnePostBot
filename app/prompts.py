@@ -123,15 +123,6 @@ CTA (выбери один, чередуй):
 
 
 # ============================================================
-# IMAGE — промпт для перегенерации изображения (gpt-image).
-# ============================================================
-IMAGE_PROMPT = (
-    "Improve this image for a tech news channel: enhance quality, make it brighter "
-    "and more contrasty, keep it clean and professional. Do not add text or watermarks."
-)
-
-
-# ============================================================
 # TRANSLATE — фиксированная задача (не настраивается).
 # ============================================================
 TRANSLATE_PROMPT = """\

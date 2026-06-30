@@ -1,5 +1,6 @@
 """
-Регенерация изображения через GPT Image (OpenAI-compatible, cc-vibe).
+Генерация изображений через gpt-image-2 (VectorEngine, OpenAI-compatible).
+Генерирует НОВЫЕ картинки по промпту поста — не редактирует референсы.
 """
 
 import asyncio
@@ -53,55 +54,21 @@ def _decode_image_response(data_item) -> bytes:
     raise ValueError("Ответ image API не содержит b64_json или url")
 
 
-async def regenerate_photo(image_path: str, prompt: str) -> str:
+def build_image_prompt(post_text: str) -> str:
+    """Собирает промпт для генерации картинки по тексту поста."""
+    return f"""\
+Create a professional tech/AI-themed illustration for a news post about:\n\n{post_text[:600]}\n\n\nStyle requirements:\n- Modern, clean tech aesthetic\n- Professional color palette (blues, purples, dark backgrounds)\n- Abstract tech imagery (circuits, neural networks, data visualization)\n- No text or typography in the image\n- Suitable for a developer-focused Telegram channel\n- High quality, detailed, visually striking"""
+
+
+async def regenerate_photo(post_text: str) -> str:
     """
-    Перегенерируем фото через image-edit API (VectorEngine gpt-image-2).
-    API уважает референсное изображение: сохраняет оригинальный контент и
-    добавляет брендовую рамку ONEPROVIDER по промпту. Маска не нужна.
+    Генерируем НОВУЮ картинку по нейронке из текста поста.
+    Не используем референс — создаём с нуля через gpt-image-2.
     """
-    if not image_path or not os.path.exists(image_path):
-        raise FileNotFoundError(f"Файл изображения не найден: {image_path}")
+    if not post_text:
+        raise ValueError("Нет текста поста для генерации изображения")
 
-    import concurrent.futures
-    retries = 0
-    while True:
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(
-                    lambda: _get_client().images.edit(
-                        model=IMAGE_MODEL,
-                        image=open(image_path, "rb"),
-                        prompt=prompt,
-                        n=1,
-                        size="1024x1024",
-                    ),
-                )
-                response = future.result(timeout=120)
-
-            image_bytes = _decode_image_response(response.data[0])
-            output_path = GENERATED_DIR / f"regenerated_{os.path.basename(image_path)}"
-            if output_path.suffix.lower() not in (".jpg", ".jpeg", ".png"):
-                output_path = output_path.with_suffix(".png")
-            with open(output_path, "wb") as f:
-                f.write(image_bytes)
-            logger.info(f"🖼 Фото переработано: {output_path}")
-            return str(output_path)
-
-        except (APIStatusError, APITimeoutError, APIConnectionError, concurrent.futures.TimeoutError) as e:
-            if not _is_retryable(e) or retries >= 4:
-                raise
-            retries += 1
-            wait = min(2 ** retries + random.random(), 30)
-            logger.warning(f"🔄 Photo regen retry #{retries}: {e}")
-            await asyncio.sleep(wait)
-        except Exception as e:
-            raise
-
-
-async def generate_image(prompt: str, filename: str = "generated") -> str:
-    """
-    Генерируем новое изображение с нуля по промпту.
-    """
+    prompt = build_image_prompt(post_text)
     import concurrent.futures
     retries = 0
     while True:
@@ -115,13 +82,13 @@ async def generate_image(prompt: str, filename: str = "generated") -> str:
                         size="1024x1024",
                     ),
                 )
-                response = future.result(timeout=180)
+                response = future.result(timeout=120)
 
             image_bytes = _decode_image_response(response.data[0])
-            output_path = GENERATED_DIR / f"{filename}.png"
+            output_path = GENERATED_DIR / f"regen_{os.getpid()}_{retries}.png"
             with open(output_path, "wb") as f:
                 f.write(image_bytes)
-            logger.info(f"🖼 Изображение сгенерировано: {output_path}")
+            logger.info(f"🖼 Изображение сгенерировано: {output_path} ({len(image_bytes)} bytes)")
             return str(output_path)
 
         except (APIStatusError, APITimeoutError, APIConnectionError, concurrent.futures.TimeoutError) as e:
@@ -129,7 +96,7 @@ async def generate_image(prompt: str, filename: str = "generated") -> str:
                 raise
             retries += 1
             wait = min(2 ** retries + random.random(), 30)
-            logger.warning(f"🔄 Image gen retry #{retries}: {e}")
+            logger.warning(f"🔄 Image regen retry #{retries}: {e}")
             await asyncio.sleep(wait)
         except Exception as e:
             raise
