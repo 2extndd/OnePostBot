@@ -63,6 +63,12 @@ CREATE TABLE IF NOT EXISTS parsed_posts (
     showing_original BOOLEAN DEFAULT 0,
     parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS card_sessions (
+    chat_id INTEGER PRIMARY KEY,
+    payload TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -297,3 +303,56 @@ def delete_parsed_posts(ids: List[int]):
     with _connect() as conn:
         conn.execute(f"DELETE FROM parsed_posts WHERE id IN ({placeholders})", ids)
     logger.info(f"🗑 Удалено {len(ids)} постов из очереди")
+
+
+# ---------- Card Session (survives FSM state.clear) ----------
+
+def save_card_session(chat_id: int, post_ids: List[int], current_index: int = 0,
+                      card_message_id: Optional[int] = None, card_is_photo: bool = False):
+    """Сохранить активную сессию карточек для чата. Переживает state.clear()."""
+    payload = json.dumps({
+        "post_ids": post_ids,
+        "current_index": current_index,
+        "card_message_id": card_message_id,
+        "card_is_photo": bool(card_is_photo),
+    })
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO card_sessions (chat_id, payload) VALUES (?, ?) "
+            "ON CONFLICT(chat_id) DO UPDATE SET payload = excluded.payload",
+            (chat_id, payload),
+        )
+
+
+def get_card_session(chat_id: int) -> Dict:
+    """Получить сессию карточек для чата. Пустой dict если нет."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT payload FROM card_sessions WHERE chat_id = ?", (chat_id,)
+        ).fetchone()
+    if not row:
+        return {}
+    try:
+        return json.loads(row["payload"])
+    except (ValueError, TypeError):
+        return {}
+
+
+def update_card_session(chat_id: int, **fields):
+    """Обновить отдельные поля сессии (merge)."""
+    session = get_card_session(chat_id)
+    session.update(fields)
+    save_card_session(
+        chat_id,
+        post_ids=session.get("post_ids", []),
+        current_index=session.get("current_index", 0),
+        card_message_id=session.get("card_message_id"),
+        card_is_photo=session.get("card_is_photo", False),
+    )
+
+
+def clear_card_session(chat_id: int):
+    """Удалить сессию карточек для чата."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM card_sessions WHERE chat_id = ?", (chat_id,))
+

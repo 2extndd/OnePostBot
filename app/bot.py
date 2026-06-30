@@ -281,8 +281,9 @@ async def do_parse(message: Message, state: FSMContext, count: int = 10, channel
             )
             post_ids.append(pid)
 
-        # Сохраняем id в состоянии, показываем ОДНУ карточку с навигацией
-        await state.update_data(post_ids=post_ids, current_index=0, card_message_id=None, card_is_photo=False)
+        # Сохраняем сессию карточек в БД (переживает state.clear())
+        db.save_card_session(message.chat.id, post_ids=post_ids, current_index=0,
+                             card_message_id=None, card_is_photo=False)
         await send_with_topic(message.chat.id, f"📥 Найдено {len(posts)} постов из {len(channels)} каналов.")
         await show_card(message, state, index=0, edit=False)
 
@@ -406,7 +407,9 @@ def _post_kb(index: int, total: int = 1) -> InlineKeyboardMarkup:
     )
 
 
-async def _total(state) -> int:
+async def _total(state, chat_id: int = None) -> int:
+    if chat_id is not None:
+        return len(db.get_card_session(chat_id).get("post_ids", []))
     data = await state.get_data()
     return len(data.get("post_ids", []))
 
@@ -414,17 +417,21 @@ async def _total(state) -> int:
 async def show_card(message: Message, state: FSMContext, index: int = 0, edit: bool = False, force_resend: bool = False):
     """
     Показать карточку поста (single-message card view).
+    Сессия (post_ids, индекс, id карточки) хранится в БД по chat_id — переживает state.clear().
     edit=False → отправить новую карточку, сохранить card_message_id/card_is_photo
     edit=True  → отредактировать текущую карточку (или пересоздать при смене типа)
     """
-    data = await state.get_data()
-    post_ids = data.get("post_ids", [])
+    chat_id = message.chat.id
+    session = db.get_card_session(chat_id)
+    post_ids = session.get("post_ids", [])
     total = len(post_ids)
     if total == 0:
         await send_with_topic(message.chat.id, "📭 Нет постов.")
         return
 
     index = max(0, min(index, total - 1))
+    # Сразу фиксируем текущий индекс в сессии (на случай in-place edit с ранним return)
+    db.update_card_session(chat_id, current_index=index)
     post = db.get_parsed_post(post_ids[index])
     if not post:
         await send_with_topic(message.chat.id, "❌ Пост не найден.")
@@ -468,9 +475,8 @@ async def show_card(message: Message, state: FSMContext, index: int = 0, edit: b
     caption = _compose(1024)       # для фото
     full_body = _compose(4096)     # для текста
 
-    card_id = data.get("card_message_id")
-    card_is_photo = data.get("card_is_photo", False)
-    chat_id = message.chat.id
+    card_id = session.get("card_message_id")
+    card_is_photo = session.get("card_is_photo", False)
 
     # При force_resend сразу удаляем старую карточку и шлём новую
     if force_resend and card_id is not None:
@@ -531,7 +537,7 @@ async def show_card(message: Message, state: FSMContext, index: int = 0, edit: b
             reply_markup=kb, parse_mode="HTML", message_thread_id=_current_thread.get(),
         )
     logger.info(f"✅ Карточка отправлена: message_id={sent.message_id}")
-    await state.update_data(card_message_id=sent.message_id, card_is_photo=is_photo, current_index=index)
+    db.update_card_session(chat_id, card_message_id=sent.message_id, card_is_photo=is_photo, current_index=index)
 
 
 async def _refresh_card(callback, state, index, new_body=None):
@@ -563,10 +569,9 @@ async def _set_status(callback, status_text: str):
 
 # ---------- callbacks ----------
 
-async def _get_post_from_db(state, index: int):
-    """Получить пост из БД по индексу в списке post_ids."""
-    data = await state.get_data()
-    post_ids = data.get("post_ids", [])
+async def _get_post_from_db(chat_id: int, index: int):
+    """Получить пост из БД по индексу в списке post_ids (сессия в БД по chat_id)."""
+    post_ids = db.get_card_session(chat_id).get("post_ids", [])
     if index < 0 or index >= len(post_ids):
         return None
     pid = post_ids[index]
@@ -580,8 +585,7 @@ async def handle_noop(callback: types.CallbackQuery):
 @dp.callback_query(lambda c: c.data == "expand_more")
 async def handle_expand_request(callback: types.CallbackQuery, state: FSMContext):
     """Клик по числу «N/M» → расширение парсинга."""
-    data = await state.get_data()
-    total = len(data.get("post_ids", []))
+    total = len(db.get_card_session(callback.message.chat.id).get("post_ids", []))
     if total == 0:
         await callback.answer("Нет постов для расширения")
         return
@@ -651,15 +655,14 @@ async def handle_expand_input(message: Message, state: FSMContext):
             )
             post_ids.append(pid)
 
-        # Добавляем к текущему списку
-        data = await state.get_data()
-        old_ids = data.get("post_ids", [])
+        # Добавляем к текущему списку (сессия в БД)
+        session = db.get_card_session(message.chat.id)
+        old_ids = session.get("post_ids", [])
         all_ids = old_ids + post_ids
-        await state.update_data(
+        db.update_card_session(
+            message.chat.id,
             post_ids=all_ids,
             current_index=len(old_ids),  # показываем первый новый пост
-            card_message_id=data.get("card_message_id"),
-            card_is_photo=data.get("card_is_photo", False),
         )
 
         await send_error(message.chat.id, f"📥 +{len(post_ids)} постов (всего {len(all_ids)})")
@@ -673,11 +676,11 @@ async def handle_expand_input(message: Message, state: FSMContext):
         await parser.close()
 
 
-async def _current_post(state):
-    """Текущий пост (по current_index из state)."""
-    data = await state.get_data()
-    idx = data.get("current_index", 0)
-    post = await _get_post_from_db(state, idx)
+async def _current_post(chat_id: int):
+    """Текущий пост (по current_index из сессии БД)."""
+    session = db.get_card_session(chat_id)
+    idx = session.get("current_index", 0)
+    post = await _get_post_from_db(chat_id, idx)
     return idx, post
 
 
@@ -685,12 +688,13 @@ async def _current_post(state):
 
 @dp.callback_query(lambda c: c.data in ("nav_prev", "nav_next"))
 async def handle_nav(callback: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    total = len(data.get("post_ids", []))
-    idx = data.get("current_index", 0)
+    chat_id = callback.message.chat.id
+    session = db.get_card_session(chat_id)
+    total = len(session.get("post_ids", []))
+    idx = session.get("current_index", 0)
     idx = idx + 1 if callback.data == "nav_next" else idx - 1
     idx = max(0, min(idx, total - 1))
-    await state.update_data(current_index=idx)
+    db.update_card_session(chat_id, current_index=idx)
     await show_card(callback.message, state, index=idx, edit=True)
     await callback.answer()
 
@@ -699,7 +703,7 @@ async def handle_nav(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(lambda c: c.data == "act_rewrite")
 async def handle_rewrite(callback: types.CallbackQuery, state: FSMContext):
-    idx, post = await _current_post(state)
+    idx, post = await _current_post(callback.message.chat.id)
     if not post:
         await callback.answer("❌ Пост не найден")
         return
@@ -722,8 +726,7 @@ async def handle_rewrite(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(lambda c: c.data == "act_rewrite_custom")
 async def handle_rewrite_custom(callback: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    idx = data.get("current_index", 0)
+    idx = db.get_card_session(callback.message.chat.id).get("current_index", 0)
     await state.set_state(RewriteState.waiting_prompt)
     await state.update_data(rewrite_index=idx)
     await send_with_topic(callback.message.chat.id, "✍️ Введи свой промпт для рерайта:")
@@ -735,7 +738,7 @@ async def handle_rewrite_input(message: Message, state: FSMContext):
     prompt = message.text
     data = await state.get_data()
     idx = data.get("rewrite_index", 0)
-    post = await _get_post_from_db(state, idx)
+    post = await _get_post_from_db(message.chat.id, idx)
     await state.set_state(None)
     if not post:
         await send_error(message.chat.id, "Пост не найден")
@@ -753,7 +756,7 @@ async def handle_rewrite_input(message: Message, state: FSMContext):
 
 @dp.callback_query(lambda c: c.data == "act_translate")
 async def handle_translate(callback: types.CallbackQuery, state: FSMContext):
-    idx, post = await _current_post(state)
+    idx, post = await _current_post(callback.message.chat.id)
     if not post:
         await callback.answer("❌ Пост не найден")
         return
@@ -777,7 +780,7 @@ async def handle_translate(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(lambda c: c.data == "act_ad")
 async def handle_ad(callback: types.CallbackQuery, state: FSMContext):
-    idx, post = await _current_post(state)
+    idx, post = await _current_post(callback.message.chat.id)
     if not post:
         await callback.answer("❌ Пост не найден")
         return
@@ -802,7 +805,7 @@ async def handle_ad(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(lambda c: c.data == "act_orig")
 async def handle_original(callback: types.CallbackQuery, state: FSMContext):
     """Свитч между оригиналом и отредактированной версией."""
-    idx, post = await _current_post(state)
+    idx, post = await _current_post(callback.message.chat.id)
     if not post:
         await callback.answer("❌ Пост не найден")
         return
@@ -821,7 +824,7 @@ async def handle_original(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(lambda c: c.data == "act_photo")
 async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMContext):
-    idx, post = await _current_post(state)
+    idx, post = await _current_post(callback.message.chat.id)
     if not post:
         await callback.answer("❌ Пост не найден")
         return
@@ -851,7 +854,7 @@ async def handle_regenerate_photo(callback: types.CallbackQuery, state: FSMConte
 
 @dp.callback_query(lambda c: c.data == "act_publish")
 async def handle_publish(callback: types.CallbackQuery, state: FSMContext):
-    idx, post = await _current_post(state)
+    idx, post = await _current_post(callback.message.chat.id)
     if not post:
         await callback.answer("❌ Пост не найден")
         return
